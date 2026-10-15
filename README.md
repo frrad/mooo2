@@ -16,6 +16,8 @@ is what ships.
 
 - [`DESIGN.md`](DESIGN.md) — the full design: contract, input surface, grey-box
   taps, comparator, operating modes, determinism limits, roadmap.
+- [`docs/containment.md`](docs/containment.md) — how the boxed reference client
+  can reach state, and where each channel is intercepted.
 - [`docs/alternatives.md`](docs/alternatives.md) — approaches considered and why
   they were rejected.
 
