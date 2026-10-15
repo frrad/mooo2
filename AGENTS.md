@@ -12,7 +12,5 @@ Guidance for AI coding agents (Claude Code, Codex, etc.) working in this repo.
 
 ## Repo scope
 
-- This repo is a design proposal (see `README.md`, `DESIGN.md`,
-  `docs/alternatives.md`). It holds methodology only.
 - Never add credentials, captures, device identifiers, binary addresses, or
   decompiled source. See the scope-and-safety section of `DESIGN.md`.
