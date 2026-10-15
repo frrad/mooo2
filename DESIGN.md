@@ -165,7 +165,9 @@ diffable at all.
 **Live stream** — fed identically to both sides at run time.
 
 - **Network inbound** — tapped *after decryption* (see §5.2).
-- **Commands / UI** — the driven high-level actions.
+- **Commands / UI** — the driven high-level actions. For the reference, these are
+  injected without UI scripting via a hook + command RPC — see
+  [`docs/driving.md`](docs/driving.md).
 
 **Not clean inputs, but still perturbing output:**
 

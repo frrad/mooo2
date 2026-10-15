@@ -18,6 +18,8 @@ is what ships.
   taps, comparator, operating modes, determinism limits, roadmap.
 - [`docs/alternatives.md`](docs/alternatives.md) — approaches considered and why
   they were rejected.
+- [`docs/driving.md`](docs/driving.md) — driving the reference client via an
+  injected hook + command RPC (no UI scripting), and the injection spike.
 
 ## Status
 
