@@ -1,0 +1,9 @@
+# Keep the build context small: only vendor/, docker/, patches/ are needed.
+.git
+.gitignore
+*.md
+docs
+DESIGN.md
+README.md
+LICENSE
+vendor/.gitkeep
