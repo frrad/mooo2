@@ -1,9 +1,14 @@
 # Grey-box tap seam
 
 This directory is the **injection seam** for the grey-box taps described in
-[`../DESIGN.md`](../DESIGN.md) §5.2. It is **intentionally empty** for the current
-deliverable: the roadmap's first spike (§13.1) boxes the **unmodified** client and
-only proves it launches under Wine. Taps are attached *after* that passes.
+[`../DESIGN.md`](../DESIGN.md) §5.2. The §13.1 launch spike boxes the **unmodified**
+client; real taps and drivers (the §5.2 seams) are attached *after* that passes and
+are **not** committed (they carry version-specific offsets — §11, §12).
+
+The one artifact committed here is [`loadprobe/`](loadprobe/): a do-nothing
+injection probe that is **our own** code (no client internals, no offsets) and
+proves only the *injection vector* — see
+[`../docs/inject-spike.md`](../docs/inject-spike.md) (Spike A).
 
 ## How a tap will slot in (no code yet)
 

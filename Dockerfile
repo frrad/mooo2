@@ -15,6 +15,20 @@
 #   - The installer bytes are pinned out-of-band by SHA256SUMS (see Makefile).
 
 ARG DEBIAN_DIGEST=sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+
+# --- Stage: cross-compile the injection probe (Spike A) ------------------------
+# loadprobe.dll is OUR code (patches/loadprobe/), built with mingw-w64 so no local
+# Windows toolchain is needed. See docs/inject-spike.md. The mingw packages come
+# from live Debian mirrors (same reproducibility caveat as the Wine apt step).
+FROM --platform=linux/amd64 debian@${DEBIAN_DIGEST} AS dllbuild
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+ && rm -rf /var/lib/apt/lists/*
+COPY patches/loadprobe/ /src/loadprobe/
+RUN x86_64-w64-mingw32-gcc -O2 -shared -o /loadprobe.dll /src/loadprobe/loadprobe.c -luser32
+
+# --- Stage: the boxed reference client -----------------------------------------
 FROM --platform=linux/amd64 debian@${DEBIAN_DIGEST}
 
 ARG WINE_BRANCH=stable
@@ -52,13 +66,17 @@ ENV WINEPREFIX=/home/wine/.wine \
 
 # --- Boxing scripts + grey-box tap seam ----------------------------------------
 COPY docker/box-install.sh docker/entrypoint.sh docker/verify-launch.sh \
+     docker/verify-inject.sh \
      docker/prefix-snapshot.sh docker/prefix-restore.sh docker/prefix-diff.sh \
      docker/prefix-state.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/entrypoint.sh /usr/local/bin/verify-launch.sh \
+             /usr/local/bin/verify-inject.sh \
              /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh \
              /usr/local/bin/prefix-state.sh
 COPY patches/ /opt/patches/
+# The built probe overwrites the source copy of patches/ with the real artifact.
+COPY --from=dllbuild /loadprobe.dll /opt/patches/loadprobe.dll
 
 # --- Install the client into the prefix at build time --------------------------
 COPY --chown=wine:wine vendor/KakaoTalk_Setup.exe /home/wine/KakaoTalk_Setup.exe

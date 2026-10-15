@@ -144,3 +144,11 @@ the Tier 2 payload dir. Not built yet; tracked in `containment.md`'s roadmap.
 attempt login — that needs a disposable, owned test account and is done manually
 (DESIGN §11). No credentials, captures, or device identifiers belong in the image
 or the repo.
+
+## Next increment: the injection spike
+
+Once the launch spike passes, [`inject-spike.md`](inject-spike.md) ("Spike A") is
+the next step: `make inject-spike` proves an injected DLL (`loadprobe.dll`) loads
+into the boxed client under Wine and the client stays up. It is still account-free
+and is the gate for both driving ([`driving.md`](driving.md)) and the read taps
+([`instrumentation.md`](instrumentation.md)).

@@ -25,6 +25,8 @@ is what ships.
 - [`docs/instrumentation.md`](docs/instrumentation.md) — the read/capture side:
   the grey-box taps that synthesize the contract's `Output` from the reference,
   the capture bus, and the first inbound-decrypt tap spike.
+- [`docs/inject-spike.md`](docs/inject-spike.md) — Spike A: proving an injected
+  DLL loads into the boxed client under Wine (the gate for driving and taps).
 
 ## Status
 
