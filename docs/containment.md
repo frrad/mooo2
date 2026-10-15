@@ -180,12 +180,20 @@ event, so it is enumerable at runtime. Methods, cheapest first:
 3. **`strace -f` on file syscalls.** Simplest ground truth, but it attaches via
    `ptrace`; the protector may treat that as a debugger (see below), so run it from
    launch on a disposable account and treat a behavior change as itself a signal.
-4. **Enforce, don't just observe (the real guarantee).** Once the layered prefix
-   lands, mount the base **read-only** and present only the declared paths; a read
-   outside the set then surfaces as `ENOENT`/`EACCES` rather than succeeding
-   silently, and `fanotify` can log every open against the prefix mount. This turns
-   "is the set complete?" from a question into an enforced invariant with violations
-   logged — which is the containment goal anyway.
+4. **Enforce, don't just observe (the real guarantee).** Mount the base
+   **read-only** and present only the declared paths; a read outside the set then
+   surfaces as `ENOENT`/`EACCES` rather than succeeding silently, and `fanotify`
+   can intercept every open against the prefix mount. This turns "is the set
+   complete?" from a question into an enforced invariant with violations logged —
+   which is the containment goal anyway. **Implemented** by
+   [`../docker/prefix-guard.sh`](../docker/prefix-guard.sh): it bind-remounts the
+   immutable base read-only (writes outside the state set fail `EROFS`) and runs an
+   `fanotify` `FAN_OPEN_PERM` guard that **`SIGKILL`s the client on any off-list
+   open** (a hard crash) — or logs under `--log-only`. Like method (1) it is
+   out-of-process (no `ptrace`, anti-tamper-safe) and reuses `prefix-state.sh`'s
+   state set as the single source of truth; unlike it, it needs a privileged
+   (`CAP_SYS_ADMIN`) container. Converge the allowlist with `prefix-trace.sh` before
+   enabling the default kill mode. See [`boxing.md`](boxing.md) for usage.
 
 Expect legitimate host noise (fonts, timezone, `/dev/urandom`, `/etc/resolv.conf`):
 the useful question is not "what files are touched" but "is anything *state-,
