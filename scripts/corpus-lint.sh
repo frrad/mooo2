@@ -12,6 +12,7 @@
 #   allowed). Put the scrubber's placeholder forms there.
 # - Only file:line is printed, never the value: CI logs are public.
 set -euo pipefail
+export LC_ALL=C
 
 dir=${1:?usage: corpus-lint.sh <corpus-dir>}
 dir=${dir%/}
@@ -51,13 +52,14 @@ fi
 bad=()
 hits=""
 for f in "${files[@]}"; do
-  # Non-empty files that grep treats as binary cannot be scanned.
-  if [[ -s "$f" ]] && ! grep -qI '' "$f"; then
+  # Files with NUL bytes cannot be scanned reliably. Check the whole file,
+  # not just grep's first buffer.
+  if grep -qaP '\x00' "$f"; then
     bad+=("$f: binary file")
     continue
   fi
   rc=0
-  out=$(grep -noE -e "$joined" "$f") || rc=$?
+  out=$(grep -anoE -e "$joined" "$f") || rc=$?
   if (( rc > 1 )); then
     echo "corpus-lint: cannot read $f" >&2
     exit 1

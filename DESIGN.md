@@ -358,7 +358,7 @@ not in CI.
 | Job | Runs on | Needs | Checks |
 |---|---|---|---|
 | `go-test` | every PR, `main` | — | Unit tests and lint for the candidate. |
-| `corpus-lint` | every PR, `main` | corpus | Denylist backstop for the scrubber. It flags phone numbers, emails, long hex or base64 strings, UUIDs, and numeric `*Id` fields, unless they match the placeholder allowlist. Binary files fail, so the corpus must be text. |
+| `corpus-lint` | every PR, `main` | corpus | Denylist backstop for the scrubber. It flags phone numbers, emails, long hex or base64 strings, UUIDs, and numeric `*Id` fields, unless they match the placeholder allowlist. Binary files fail, so the corpus must be text. Allowlist entries in `.lint-allow` must match the whole flagged text. |
 | `parity` | every PR, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
 | `ref` | same-repo PRs, `main` | registry cache, corpus | Builds the image, then the reference replays the sanitized corpus and must reproduce its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. On `main` it then pushes `kakao-ref:<sha>`. Before pushing, it checks that the package is private. Build and self-check share a job because PR builds are never pushed. |
 | `release` | `main` | — | If every job that ran passed (skipped jobs are fine), it retags `kakao-ref:<sha>` as `kakao-ref:main`, prunes to the last 5 builds, and re-checks that the package is private. |

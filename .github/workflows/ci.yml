@@ -6,8 +6,9 @@
 #   testdata/corpus/         → corpus-lint, parity, reference self-check
 #   ref/pin.env              → ref, release
 #
-# The reference image contains the official client, so it is private, and its
-# jobs never run for PRs from forks.
+# The reference image contains the official client, so it is private. Its jobs
+# are skipped for fork PRs, and fork runs could not reach the registry anyway:
+# they get no secrets.
 
 name: ci
 
@@ -128,6 +129,10 @@ jobs:
           build-args: ${{ steps.pin.outputs.args }}
           load: true
           tags: kakao-ref:local
+          # Keep <sha> a single manifest: the untagged prune in `release` would
+          # delete an index's child manifests.
+          provenance: false
+          sbom: false
           cache-from: type=registry,ref=${{ env.REF_IMAGE }}:buildcache
           cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref={0}:buildcache,mode=max', env.REF_IMAGE) || '' }}
       - name: Self-check against corpus
@@ -176,7 +181,11 @@ jobs:
           package-name: kakao-ref
           package-type: container
           min-versions-to-keep: 6
+      - name: :main must still resolve
+        if: always()
+        run: docker buildx imagetools inspect "$REF_IMAGE:main"
       - name: Package must still be private
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: ref/check-private.sh
