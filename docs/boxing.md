@@ -224,14 +224,11 @@ kernel-level, anti-tamper-safe enforcement point.
 
 ### Future: a layered prefix
 
-`prefix-guard.sh` already enforces a read-only base in place; the remaining
-structural step splits the prefix into separately-mounted layers. It follows the
+`prefix-guard.sh` already enforces a read-only base in place, and the state-only
+tool makes the snapshot loop cheap, but the prefix is still one directory. The
+structural step splits it into separately-mounted layers, following the
 Matrix–WeChat `wechat-box` precedent (immutable Wine base image + mounted-in
 payloads):
-
-The state-only tool makes the snapshot loop cheap, but the prefix is still one
-directory. The structural version splits it, following the Matrix–WeChat
-`wechat-box` precedent (immutable Wine base image + mounted-in payloads):
 
 - **Immutable lower layer** — Wine + installed client, baked into the image,
   mounted **read-only**. A read-only base is also what makes "did the client try to
