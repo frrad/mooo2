@@ -26,7 +26,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN dpkg --add-architecture i386 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl xvfb x11-utils cabextract winbind procps \
+      ca-certificates curl xvfb x11-utils cabextract winbind procps python3 \
  && mkdir -pm755 /etc/apt/keyrings \
  && curl -fsSL -o /etc/apt/keyrings/winehq-archive.key \
       https://dl.winehq.org/wine-builds/winehq.key \
@@ -54,10 +54,12 @@ ENV WINEPREFIX=/home/wine/.wine \
 COPY docker/box-install.sh docker/entrypoint.sh docker/verify-launch.sh \
      docker/prefix-snapshot.sh docker/prefix-restore.sh docker/prefix-diff.sh \
      docker/prefix-state.sh docker/prefix-trace.sh \
+     docker/prefix-guard.sh docker/prefix-guard.py \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/entrypoint.sh /usr/local/bin/verify-launch.sh \
              /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh \
-             /usr/local/bin/prefix-state.sh /usr/local/bin/prefix-trace.sh
+             /usr/local/bin/prefix-state.sh /usr/local/bin/prefix-trace.sh \
+             /usr/local/bin/prefix-guard.sh /usr/local/bin/prefix-guard.py
 COPY patches/ /opt/patches/
 
 # --- Install the client into the prefix at build time --------------------------

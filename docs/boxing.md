@@ -177,7 +177,57 @@ precisely because it is the lowest-risk against the protector.
 capture artifact: it is written to a temp dir and deleted unless `--keep`, and
 must never be committed.
 
+### Enforcing the state set (`prefix-guard.sh`)
+
+`prefix-trace.sh` *observes*; `prefix-guard.sh` *enforces*. It turns "is the state
+set complete?" into an invariant the box upholds at runtime: any file access
+outside the declared set crashes the client. This is method (4) of
+[`containment.md`](containment.md)'s "Validating the state set". Two out-of-process
+layers (no `ptrace`, anti-tamper-safe), both needing a **privileged /
+`CAP_SYS_ADMIN`** container:
+
+1. **Structural read-only base.** The immutable install (`drive_c/windows`,
+   `drive_c/Program Files`) is bind-remounted **read-only**, so a write outside the
+   state set fails `EROFS` and an unprovisioned base read fails `ENOENT`. The prefix
+   is first bind-mounted to itself, which also bounds the guard's scope to the
+   prefix subtree.
+2. **Active `fanotify` guard** (`prefix-guard.py`). Intercepts every open in the
+   writable region via `FAN_OPEN_PERM`, classifies it against the state set, and on
+   any off-list access **`SIGKILL`s the whole client process tree** — a hard crash —
+   or logs it under `--log-only`.
+
+```sh
+# must be root; e.g.
+docker run --rm --privileged -u 0 <image> prefix-guard.sh              # kill mode (default)
+docker run --rm --privileged -u 0 <image> prefix-guard.sh --log-only   # observe, don't kill
+docker run --rm --privileged -u 0 <image> prefix-guard.sh --allow-extra 'drive_c/foo/*'
+#   --seconds N     launch-hold window      --no-readonly   skip the ro base layer
+```
+
+Like `prefix-trace.sh` it reuses `prefix-state.sh`'s `STATE_GLOBS` as the single
+source of truth (the wrapper `source`s it and passes the globs to the guard). The
+base and known-benign allow rules are the guard's own policy: the benign seed is
+exactly the pre-login residue `prefix-trace.sh` surfaces (`Desktop`/`Downloads`
+known-folder probes, the compiled-in OpenSSL build path), so the **unmodified**
+client runs clean under the default kill mode and only a *genuinely new* access
+crashes it.
+
+**Converge first.** A too-tight allowlist crashes the client on a legitimate read.
+The workflow is: run `prefix-trace.sh`, fold any benign "unexpected" into the
+allowlist (`--allow-extra`, or the seed in `prefix-guard.py`), *then* enable kill
+mode. The guard exits non-zero (3) on a violation, so CI can gate on it.
+
+**Caveat.** `fanotify` and the read-only bind-remounts need `CAP_SYS_ADMIN`; the
+guard refuses to run unless it is root and prints how to launch the container. This
+is the same privilege class as the `bpftrace` trace mode — the trade for a
+kernel-level, anti-tamper-safe enforcement point.
+
 ### Future: a layered prefix
+
+`prefix-guard.sh` already enforces a read-only base in place; the remaining
+structural step splits the prefix into separately-mounted layers. It follows the
+Matrix–WeChat `wechat-box` precedent (immutable Wine base image + mounted-in
+payloads):
 
 The state-only tool makes the snapshot loop cheap, but the prefix is still one
 directory. The structural version splits it, following the Matrix–WeChat
