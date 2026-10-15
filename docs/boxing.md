@@ -115,9 +115,67 @@ full-prefix `prefix-snapshot.sh` only to re-baseline the whole box on a new clie
 release (DESIGN §9).
 
 **Is the state set complete?** It is a *declared* set, validated by observation —
-see "Validating the state set" in [`containment.md`](containment.md) for how to
-enumerate what the client actually reads at runtime and confirm nothing
-state-bearing falls outside it.
+see "Validating the state set" in [`containment.md`](containment.md) for the
+method, and `prefix-trace.sh` below for the implementation.
+
+### Validating the state set at runtime (`prefix-trace.sh`)
+
+The snapshot/diff tools above show what the client *wrote*. They cannot show what
+it *read* — including reads of paths we never provisioned (a probe for a missing
+file is itself a signal). `prefix-trace.sh` closes that gap: it launches the
+boxed client, records every file and registry access, and classifies each one, so
+the claim "the state set is the only state-bearing thing the client reads" becomes
+checkable rather than assumed.
+
+```sh
+# default: WINEDEBUG trace of a ~20s headless launch (no login), then report
+prefix-trace.sh
+
+prefix-trace.sh --seconds 30            # longer exercise window
+prefix-trace.sh --keep --out /work      # retain the raw log under /work
+prefix-trace.sh --strict                # exit non-zero if anything is "unexpected"
+prefix-trace.sh --mode strace           # ptrace ground truth (caveat below)
+prefix-trace.sh --mode bpftrace         # eBPF ground truth (needs CAP_BPF)
+```
+
+It reuses `prefix-state.sh`'s `STATE_GLOBS` as the single source of truth (it
+`source`s the script; the state set is never redefined), and buckets every access
+as:
+
+- **base** — immutable Wine/client install (`C:\windows`, the installed client
+  under `Program Files\Kakao`, the host Wine runtime, Wine's XDG desktop
+  integration). Expected, ignorable.
+- **state** — inside the declared state set (registry hives + the Kakao AppData /
+  ProgramData trees, and the ancestor dirs traversed to reach them). Covered.
+- **host-env** — clock / RNG / locale / timezone / fonts / DNS / run-noise
+  (`/dev/urandom`, `/etc/localtime`, `/usr/share/fonts`, `Temp`, …), neutralized by
+  the other Tier-1 seams (DESIGN §5.1). Expected.
+- **unexpected** — everything else. This is the list to read: anything here is a
+  state-, identity-, or determinism-bearing read that the state set does not cover,
+  *or* benign noise (pre-login known-folder probes such as `Desktop`/`Downloads`,
+  bare drive-root traversal) — confirm each.
+
+The report prints per-bucket counts and the full "unexpected" list. On the current
+pre-login client the useful catch is that the client probes a **compiled-in
+OpenSSL config/CA path from its build machine** (`C:\kakao\work\vcpkg\…\openssl.cnf`,
+`cert.pem`) that does not exist in the prefix — exactly the kind of determinism-
+relevant read worth knowing about, surfaced rather than hidden.
+
+#### Methods and the anti-tamper caveat
+
+| `--mode` | How | Anti-tamper risk |
+|----------|-----|------------------|
+| `winedebug` (default) | `WINEDEBUG=+file,+reg`; Wine logs resolved paths itself | **None** — no `ptrace`, nothing attaches to the protected process |
+| `strace` | `strace -f` on file syscalls | **Attaches via `ptrace`** — the Themida-family protector may treat it as a debugger (see [`containment.md`](containment.md) "Anti-tamper"); treat any behavior change as itself a signal |
+| `bpftrace` | eBPF on the `openat` tracepoint | None (ptrace-free), but needs a privileged / `CAP_BPF` container and `bpftrace` in the image |
+
+`strace`/`bpftrace` are not installed in the image by default; those modes fail
+with a clear message rather than silently. `winedebug` is the primary method
+precisely because it is the lowest-risk against the protector.
+
+**Safety (DESIGN §11).** The client is never logged in. The raw trace log is a
+capture artifact: it is written to a temp dir and deleted unless `--keep`, and
+must never be committed.
 
 ### Future: a layered prefix
 

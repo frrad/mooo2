@@ -56,12 +56,12 @@ ENV WINEPREFIX=/home/wine/.wine \
 COPY docker/box-install.sh docker/box-proxy.sh docker/entrypoint.sh \
      docker/verify-launch.sh docker/verify-inject.sh \
      docker/prefix-snapshot.sh docker/prefix-restore.sh docker/prefix-diff.sh \
-     docker/prefix-state.sh \
+     docker/prefix-state.sh docker/prefix-trace.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/local/bin/entrypoint.sh \
              /usr/local/bin/verify-launch.sh /usr/local/bin/verify-inject.sh \
              /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh \
-             /usr/local/bin/prefix-state.sh
+             /usr/local/bin/prefix-state.sh /usr/local/bin/prefix-trace.sh
 COPY patches/ /opt/patches/
 RUN chmod +x /opt/patches/dllproxy/gen-forwarders.sh
 
