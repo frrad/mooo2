@@ -1,0 +1,11 @@
+# Egress allowlist for net-interpose (docs/boxing.md, "Network interpose").
+# Empty means default-deny: the boxed client reaches nothing off-box.
+#
+# One entry per line, optionally with :PORT:
+#   name            exact DNS name
+#   *.suffix        any name under suffix (and suffix itself)
+#   a.b.c.d[/n]     IPv4 address or CIDR
+#
+# Leave this empty in the repo. For the login spike (manual, disposable account),
+# mount a filled-in copy over /etc/kakao/net-allowlist. Start from the names
+# verify-net.sh lists as "client-denied".
