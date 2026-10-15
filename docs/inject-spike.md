@@ -97,9 +97,21 @@ it. It does **not** prove a tap can read a seam or a driver can call an internal
 function — that is **Spike B** (driving.md §5), which is account-bearing and comes
 next. Spike A is the cheap, account-free probe that must pass first.
 
+## Known limitation
+
+`box-proxy.sh` picks the **first** client-bundled DLL the exe statically imports and
+does not fall back. If a re-baseline onto a new client build makes that first pick
+import-by-ordinal (name-based forwarders would not satisfy it) or export nothing
+usable, the spike FAILs even if another bundled import would have worked — a
+false-FAIL, not a false-PASS. If that happens, extend the discovery loop to try the
+next candidate (verify the proxy links with a non-zero forwarder count, else
+continue).
+
 ## Scope and safety (DESIGN §11)
 
 No credentials, captures, or device identifiers. No login. The probe and generator
 carry no proprietary bytes, offsets, or committed symbol lists. The proxied module
-name is discovered at build time, not hardcoded. Real taps/drivers remain
+is **discovered at build time, not hardcoded** in the tooling; module names that
+appear in examples/output below are the ones observed on the current client build,
+shown as evidence, not values the code depends on. Real taps/drivers remain
 uncommitted, reviewed artifacts.

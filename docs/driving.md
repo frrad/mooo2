@@ -44,6 +44,11 @@ KAKAO_HOOK_OVERRIDES  →  WINEDLLOVERRIDES  →  Wine loads the hook DLL into t
                                               client process at startup
 ```
 
+> **Refinement from Spike A** (see [`inject-spike.md`](inject-spike.md)):
+> `WINEDLLOVERRIDES` sets a module's *native/builtin load order* but does **not**
+> by itself force the load into the process. The load is triggered by proxying a
+> client-bundled import; the override is still used to force a seam module native.
+
 The entrypoint already does the wiring and defaults to empty (so the unmodified
 client runs for the §13.1 launch spike):
 

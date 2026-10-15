@@ -37,7 +37,7 @@ target=""
 while IFS= read -r f; do
   b="$(basename "$f")"
   lb="$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')"
-  if printf '%s\n' "$imports" | grep -qx "$lb"; then target="$b"; break; fi
+  if printf '%s\n' "$imports" | grep -Fqx "$lb"; then target="$b"; break; fi
 done < <(find "$APPDIR" -maxdepth 1 -iname '*.dll' | sort)
 
 [ -n "$target" ] || { echo "box-proxy: no client-bundled DLL is statically imported by the exe" >&2; exit 1; }

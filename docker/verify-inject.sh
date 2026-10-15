@@ -44,7 +44,7 @@ ALIVE=0
 pgrep -fi 'KakaoTalk.exe' >/dev/null 2>&1 && ALIVE=1
 
 LOADED=0
-if [ -f "$MARKER" ] && grep -qi 'KakaoTalk.exe' "$MARKER"; then
+if [ -f "$MARKER" ] && grep -Fqi 'KakaoTalk.exe' "$MARKER"; then
   LOADED=1
 fi
 
