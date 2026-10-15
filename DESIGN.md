@@ -165,7 +165,9 @@ diffable at all.
 **Live stream** — fed identically to both sides at run time.
 
 - **Network inbound** — tapped *after decryption* (see §5.2).
-- **Commands / UI** — the driven high-level actions.
+- **Commands / UI** — the driven high-level actions. For the reference, these are
+  injected without UI scripting via a hook + command RPC — see
+  [`docs/driving.md`](docs/driving.md).
 
 **Not clean inputs, but still perturbing output:**
 
@@ -196,6 +198,11 @@ Four internal seams, each hooked to capture the *useful* representation:
 The capture bus collects all four taps plus the seized clock/RNG. That bundle *is*
 the contract. Outbound packets and emitted events are not a separate output path —
 they fall out of the crypto tap (before-encrypt) and the model/decision taps.
+
+The read side of this — the four taps, the capture bus and its format, and the
+first inbound-decrypt tap spike — is scoped in
+[`docs/instrumentation.md`](docs/instrumentation.md); it is the capture-side
+counterpart to the driving (command) side.
 
 The payoff: a black-box diff can only say "the ciphertext differs." This grey-box
 bus can say "the candidate's member-list request object has member IDs in a
