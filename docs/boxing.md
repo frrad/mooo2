@@ -92,11 +92,11 @@ prefix-restore.sh /work/baseline.tar
 ### State-only snapshots (`prefix-state.sh`)
 
 A full prefix snapshot is ~1.5 GB / ~13 s uncompressed on the current client,
-because it includes the immutable base — Wine's own `C:\windows` (~1.4 GB) and the
-installed client (~135 MB), which are identical every run and already live in the
-image's read-only layers. The only state the client's output actually depends on is
-the **registry + the Kakao app-data tree: ~3 MB.** `prefix-state.sh` operates on
-exactly that set:
+because almost all of it is immutable base — Wine's own `C:\windows` (~1.4 GB) and
+the installed client (~135 MB), which are identical every run and already live in
+the image's read-only layers. The only state the client's output actually depends
+on is the **registry + the Kakao app-data tree: ~3 MB.** `prefix-state.sh` operates
+on exactly that set:
 
 ```sh
 prefix-state.sh snapshot /work/state.tar      # ~3 MB, not 1.5 GB

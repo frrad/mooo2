@@ -12,6 +12,7 @@ set -euo pipefail
 
 BASE_TAR="${1:?usage: prefix-diff.sh <baseline.tar> [--hash]}"
 MODE="${2:-}"
+LABEL="size"; [ "$MODE" = "--hash" ] && LABEL="hash"
 : "${WINEPREFIX:?WINEPREFIX must be set}"
 [ -f "$BASE_TAR" ] || { echo "FAIL: baseline '$BASE_TAR' not found" >&2; exit 1; }
 
@@ -42,8 +43,8 @@ manifest "$TMP/base"       > "$TMP/base.man"
 manifest "$PREFIX_PARENT"  > "$TMP/cur.man"
 
 # Compare keyed on path (field 2, tab-delimited). awk handles spaces in paths.
-awk -F'\t' -v mode="${MODE:-size}" -v base="$BASE_TAR" '
-  NR==FNR { bkey[$2]=$1; bhas[$2]=1; next }
+awk -F'\t' -v mode="$LABEL" -v base="$BASE_TAR" '
+  NR==FNR { bkey[$2]=$1; next }
   {
     chas[$2]=1
     if (!($2 in bkey))       { print "+ " $2; a++ }

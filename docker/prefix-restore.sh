@@ -14,8 +14,9 @@ SNAP="${1:?usage: prefix-restore.sh <snapshot.tar>}"
 : "${WINEPREFIX:?WINEPREFIX must be set}"
 [ -f "$SNAP" ] || { echo "FAIL: snapshot '$SNAP' not found" >&2; exit 1; }
 
-# Guard against catastrophic targets before we rm -rf anything.
-case "$WINEPREFIX" in
+# Guard against catastrophic targets before we rm -rf anything (tolerate a
+# trailing slash in WINEPREFIX).
+case "${WINEPREFIX%/}" in
   ""|"/"|"/home"|"/root"|"/home/wine") echo "FAIL: refusing to restore over '$WINEPREFIX'" >&2; exit 1 ;;
 esac
 
