@@ -199,6 +199,11 @@ The capture bus collects all four taps plus the seized clock/RNG. That bundle *i
 the contract. Outbound packets and emitted events are not a separate output path —
 they fall out of the crypto tap (before-encrypt) and the model/decision taps.
 
+The read side of this — the four taps, the capture bus and its format, and the
+first inbound-decrypt tap spike — is scoped in
+[`docs/instrumentation.md`](docs/instrumentation.md); it is the capture-side
+counterpart to the driving (command) side.
+
 The payoff: a black-box diff can only say "the ciphertext differs." This grey-box
 bus can say "the candidate's member-list request object has member IDs in a
 different order, triggered one event later" — the difference between a flag you can
