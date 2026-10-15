@@ -20,6 +20,17 @@ start_xvfb() {
 }
 
 start_xvfb
+XVFB_PID=$!
+
+# Tear the build-time display down on exit so its /tmp/.X0-lock and socket are
+# not baked into the image layer: at runtime a stale lock whose PID happens to
+# be alive makes Xvfb refuse to start, and the client exits with no display.
+cleanup_xvfb() {
+  kill "$XVFB_PID" 2>/dev/null || true
+  wait "$XVFB_PID" 2>/dev/null || true
+  rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+}
+trap cleanup_xvfb EXIT
 
 echo ">> initializing Wine prefix (WINEARCH=${WINEARCH:-unset})"
 WINEDLLOVERRIDES="mscoree,mshtml=" wineboot --init
