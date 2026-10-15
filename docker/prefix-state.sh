@@ -133,10 +133,15 @@ cmd_diff() {
     }' "$tmp/base.man" "$tmp/cur.man"
 }
 
-SUB="${1:?usage: prefix-state.sh snapshot|restore|diff ...}"; shift
-case "$SUB" in
-  snapshot) cmd_snapshot "$@" ;;
-  restore)  cmd_restore  "$@" ;;
-  diff)     cmd_diff     "$@" ;;
-  *) echo "FAIL: unknown subcommand '$SUB'" >&2; exit 1 ;;
-esac
+# Run the CLI only when executed directly. When another script sources this file
+# (e.g. prefix-trace.sh, to reuse STATE_GLOBS / state_paths as the single source
+# of truth for the state set), the dispatch below is skipped.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  SUB="${1:?usage: prefix-state.sh snapshot|restore|diff ...}"; shift
+  case "$SUB" in
+    snapshot) cmd_snapshot "$@" ;;
+    restore)  cmd_restore  "$@" ;;
+    diff)     cmd_diff     "$@" ;;
+    *) echo "FAIL: unknown subcommand '$SUB'" >&2; exit 1 ;;
+  esac
+fi

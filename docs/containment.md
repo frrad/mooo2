@@ -166,7 +166,12 @@ event, so it is enumerable at runtime. Methods, cheapest first:
    least likely to perturb the protected process. First pass: drive a scenario,
    collect the log, bucket each access as *base* (immutable), *state* (in our set),
    *host-env* (neutralized elsewhere — clock, RNG, locale, timezone, fonts), or
-   *unexpected* (investigate).
+   *unexpected* (investigate). **Implemented** by
+   [`../docker/prefix-trace.sh`](../docker/prefix-trace.sh) (default mode); it
+   reuses `prefix-state.sh`'s state set as the single source of truth and emits
+   per-bucket counts plus the full "unexpected" list. Methods (2) and (3) below are
+   available behind `--mode strace` / `--mode bpftrace`. See
+   [`boxing.md`](boxing.md) for usage.
 2. **Kernel-level ground truth — eBPF/`bpftrace` on the `openat`/`read`
    tracepoints**, scoped to the Wine process tree. Catches raw syscalls that bypass
    libc (Wine's `ntdll` issues some directly), needs no `ptrace`, and is invisible
