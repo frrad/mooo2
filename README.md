@@ -22,6 +22,9 @@ is what ships.
   they were rejected.
 - [`docs/driving.md`](docs/driving.md) — driving the reference client via an
   injected hook + command RPC (no UI scripting), and the injection spike.
+- [`docs/instrumentation.md`](docs/instrumentation.md) — the read/capture side:
+  the grey-box taps that synthesize the contract's `Output` from the reference,
+  the capture bus, and the first inbound-decrypt tap spike.
 
 ## Status
 
