@@ -22,7 +22,7 @@ start_xvfb() {
 start_xvfb
 
 echo ">> initializing Wine prefix (WINEARCH=${WINEARCH:-unset})"
-wineboot --init
+WINEDLLOVERRIDES="mscoree,mshtml=" wineboot --init
 wineserver -w || true
 
 echo ">> running installer silently (NSIS /S): $INSTALLER"
