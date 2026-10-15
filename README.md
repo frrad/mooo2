@@ -20,6 +20,8 @@ is what ships.
   can reach state, and where each channel is intercepted.
 - [`docs/alternatives.md`](docs/alternatives.md) — approaches considered and why
   they were rejected.
+- [`docs/driving.md`](docs/driving.md) — driving the reference client via an
+  injected hook + command RPC (no UI scripting), and the injection spike.
 
 ## Status
 
