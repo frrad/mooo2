@@ -99,10 +99,12 @@ in any internal address.
 - **What it touches.** The encrypted local message DB, config, and caches under
   the client's `AppData\Local` tree, all inside `drive_c` of the Wine prefix.
 - **Interception (Tier 1).** The entire prefix is a host directory. Restore it to
-  a known baseline before each run (overlay or bind-mounted snapshot), and diff the
-  post-run tree for persisted writes. For *decoded* record-level diffs rather than
-  encrypted-blob diffs, add the Tier 2 **storage tap** (DESIGN §5.2 #2) at the
-  serialization layer.
+  a known baseline before each run and diff the post-run tree for persisted writes.
+  Implemented by `prefix-snapshot.sh` / `prefix-restore.sh` / `prefix-diff.sh`
+  (see [`boxing.md`](boxing.md)); because registry and device identity also live in
+  the prefix, this one mechanism covers those two channels as well. For *decoded*
+  record-level diffs rather than encrypted-blob diffs, add the Tier 2 **storage
+  tap** (DESIGN §5.2 #2) at the serialization layer — future work.
 
 ### Registry — snapshot
 
@@ -254,9 +256,11 @@ this as plan B; do not build it unless the spike forces it.
   Windows-guest fallback above before continuing.
 - **The plan — Tier 1 only (out-of-process, low anti-tamper risk), in rough
   order:**
-  1. Network interpose with default-deny egress + ingress fan-out (also the
+  1. Prefix snapshot/restore for filesystem + registry + device identity.
+     **Done** — `prefix-snapshot.sh` / `prefix-restore.sh` / `prefix-diff.sh`
+     (see [`boxing.md`](boxing.md)).
+  2. Network interpose with default-deny egress + ingress fan-out (also the
      Shadow-mode gate, DESIGN §8).
-  2. Prefix snapshot/restore for filesystem + registry + device identity.
   3. Clock seize (`libfaketime`) and RNG seize (`ntdll` shim) — the latter also
      makes captured traffic decryptable via a candidate key schedule.
 - **Future work — Tier 2 (in-process), explicitly out of scope for now.** Only

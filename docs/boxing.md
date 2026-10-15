@@ -57,6 +57,42 @@ grey-box taps** — tap offsets move every release (DESIGN §12).
   silent install), `entrypoint.sh` (headless X + tap seam), `verify-launch.sh`
   (the spike's pass/fail check).
 
+## Prefix snapshot / restore (Tier 1 containment)
+
+The filesystem/DB, the Wine registry, and the synthesized device identity all
+live inside `$WINEPREFIX`, so one archive snapshots all three "Snapshot" channels
+of DESIGN §5.1 at once. Three scripts (shipped in the image at
+`/usr/local/bin/`, source under [`../docker/`](../docker/)) implement the
+"restore to a known baseline before each run, diff after" loop from
+[`containment.md`](containment.md):
+
+```sh
+# capture a clean baseline (e.g. right after a fresh boot, before login)
+prefix-snapshot.sh /work/baseline.tar
+
+# ... drive the client through a scenario ...
+
+# see what it persisted (paths added / removed / size-changed)
+prefix-diff.sh /work/baseline.tar            # fast: path + size
+prefix-diff.sh /work/baseline.tar --hash     # also content (sha256)
+
+# reset the prefix to the baseline for the next run
+prefix-restore.sh /work/baseline.tar
+```
+
+- `prefix-snapshot.sh` writes a deterministic tar (sorted, zeroed owner/mtime) so
+  an unchanged prefix hashes identically run to run. It does not modify the prefix.
+- `prefix-restore.sh` stops `wineserver`, extracts to a staging dir, then swaps —
+  a failed extraction leaves the old prefix intact. It refuses obviously wrong
+  targets (`/`, `/home`, `$HOME`).
+- `prefix-diff.sh` reports `+ added`, `- removed`, `~ changed` paths; it is
+  path+size/hash level only. Decoding the records themselves is the Tier 2 storage
+  tap (future work).
+
+A full prefix snapshot is ~1.5 GB / ~13 s uncompressed on the current client — fine
+for a bench, heavy for CI. Compression or an overlayfs lower layer is a future
+optimization.
+
 ## Scope and safety
 
 `verify-launch.sh` stops at "the process launches and stays up." It does **not**
