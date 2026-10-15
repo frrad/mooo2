@@ -169,6 +169,12 @@ Two staged checks, cheapest first:
 
 ### Spike A — does an injected DLL load into the client under Wine?
 
+> **Implemented and passing** — see [`inject-spike.md`](inject-spike.md) and
+> `make inject-spike`. Finding: `WINEDLLOVERRIDES` alone does not *trigger* a load,
+> and `AppInit_DLLs` is not honored by Wine; the working vector is **proxying a
+> client-bundled static import** (forwarding its exports to a renamed original).
+> The paragraph below is the original framing; inject-spike.md is authoritative.
+
 The minimal question from DESIGN's §10 spirit ("the single biggest unknown is cheap
 to resolve"): can a `WINEDLLOVERRIDES`-selected DLL be loaded into the client
 process at all.
