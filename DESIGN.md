@@ -2,9 +2,9 @@
 
 **Status:** draft / proposal
 **Scope:** interoperability research methodology for a clean-room KakaoTalk
-secondary-device client. Methodology only — no credentials, captures, device
-identifiers, binary addresses, or decompiled source belong in this document or
-this repository.
+secondary-device client. No credentials, captures, device identifiers, or
+decompiled source belong in this document or this repository. Grey-box tap
+offsets are in scope (see §11).
 
 ---
 
@@ -332,9 +332,13 @@ tap-offset stability.
 - Only inspect accounts, clients, devices, and traffic that the operator owns or is
   explicitly authorized to test. Prefer disposable test accounts.
 - Never commit credentials, session material, tokens, device identifiers, phone
-  numbers, private messages, raw captures, decrypted databases, proprietary
-  binaries, or binary-specific addresses. Store sensitive lab artifacts outside the
-  repository and scan staged changes before every commit.
+  numbers, private messages, raw captures, decrypted databases, or proprietary
+  binaries. Store sensitive lab artifacts outside the repository and scan staged
+  changes before every commit.
+- Grey-box tap offsets and binary-specific addresses for the reference client
+  *are* in scope. They are needed to rebuild the reference, and they live next to
+  the tap code. Key every offset to the exact official-client version (and
+  installer hash) it applies to.
 - This repository documents an implementation-neutral methodology. Reproducible
   algorithms, storage/crypto recipes, necessary constants, and synthetic vectors
   that help authorized users interoperate are in scope; live secrets and
