@@ -12,5 +12,6 @@ Guidance for AI coding agents (Claude Code, Codex, etc.) working in this repo.
 
 ## Repo scope
 
-- Never add credentials, captures, device identifiers, binary addresses, or
-  decompiled source. See the scope-and-safety section of `DESIGN.md`.
+- Never add credentials, raw captures, device identifiers, proprietary binaries,
+  or decompiled source. Grey-box tap offsets, binary addresses, and sanitized
+  recordings are allowed. See the scope-and-safety section of `DESIGN.md`.

@@ -2,9 +2,9 @@
 
 **Status:** draft / proposal
 **Scope:** interoperability research methodology for a clean-room KakaoTalk
-secondary-device client. Methodology only — no credentials, captures, device
-identifiers, binary addresses, or decompiled source belong in this document or
-this repository.
+secondary-device client. No credentials, raw captures, device identifiers, or
+decompiled source belong in this document or this repository. Grey-box tap
+offsets and sanitized recordings are in scope (see §11).
 
 ---
 
@@ -325,6 +325,95 @@ disposable, owned test account? If yes, attach the hook and confirm one inbound
 decrypt tap and one driven send. Only then invest in containerization and
 tap-offset stability.
 
+### 10.1 CI pipeline
+
+CI uses **replay only** (§8, §9). It never talks to the live server and needs no
+account secrets. Recording is a manual step that runs on the operator's machine,
+not in CI.
+
+**Artifacts.**
+
+- **Reference image** (`kakao-ref`). This is the only private artifact, because it
+  contains the official client. It is stored as a private GitHub Container
+  Registry (GHCR) package and has three layers, with the ones that change most
+  often on top:
+  1. Wine base.
+  2. The official installer, downloaded at a pinned `KAKAO_VERSION` and verified
+     against a pinned SHA-256, then silently installed. A version bump is a
+     manual PR. The image is built from the upstream installer, so this repo
+     never stores the binary.
+  3. The grey-box taps plus the offset table for that exact version (§11). This
+     layer is rebuilt on every change. Layers 1–2 come from a private registry
+     build cache, so a tap change rebuilds in minutes.
+- **Corpus** (`testdata/corpus/<kakao-version>/`). These are recorded contract
+  bundles (§6), committed to the repository. Recordings come from disposable
+  accounts and are sanitized before commit (§11). The scrubber replaces session
+  material, tokens, device identifiers, phone numbers, and account IDs with
+  stable, format-preserving placeholders. It uses the same placeholder for a
+  value everywhere in the bundle, inputs and outputs alike, so replay stays
+  deterministic.
+
+**Jobs.**
+
+| Job | Runs on | Needs | Checks |
+|---|---|---|---|
+| `go-test` | every PR, `main` | — | Unit tests and lint for the candidate. |
+| `corpus-lint` | every PR, `main` | corpus | Denylist backstop for the scrubber. It flags phone numbers, emails, long hex or base64 strings, UUIDs, and numeric `*Id` fields, unless they match the placeholder allowlist. Binary files fail, so the corpus must be text. Allowlist entries in `.lint-allow` must match the whole flagged text. |
+| `parity` | every PR, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
+| `ref` | same-repo PRs, `main` | registry cache, corpus | Builds the image, then the reference replays the sanitized corpus and must reproduce its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. On `main` it then pushes `kakao-ref:<sha>`. Before pushing, it checks that the package is private. Build and self-check share a job because PR builds are never pushed. |
+| `release` | `main` | — | If every job that ran passed (skipped jobs are fine), it retags `kakao-ref:<sha>` as `kakao-ref:main`, prunes to the last 5 builds, and re-checks that the package is private. |
+
+Each `main` build ships the code, taps, corpus, and image together under one
+commit SHA. `main` runs are serialized. If several merges queue up, GitHub
+skips the intermediate runs and builds only the newest. Same-repo PRs build the image without
+pushing and run the same checks, so a broken tap fails before merge. Fork PRs run
+everything except `ref` and `release`.
+
+**Recording** runs locally against a disposable account, with the same image the
+CI uses. Each recording then goes through the scrubber before it is committed.
+Bumping the client version means updating the offsets, re-recording, and
+committing a new corpus directory, all in one PR.
+
+**Public-repo guards.** Everything is public except the image. A PR's workflow
+runs from the PR's own copy of the workflow file, so a fork can rewrite any `if:`
+condition. The guards therefore rely on credentials, not on workflow logic.
+
+- The registry is reached only with the `GHCR_TOKEN` secret, never with
+  `GITHUB_TOKEN`, and the repository has no Actions access to the package.
+  Fork runs get no secrets, so even a rewritten workflow cannot pull the image
+  or its build cache. The `trusted` check in the workflow only skips `ref`
+  cleanly for forks.
+- Same-repo branches do get the secret, so the convention that only `main`
+  pushes is enforced by review, not by GitHub. Only people with write access can
+  push same-repo branches.
+- The image is never uploaded as a workflow artifact, and its build never uses the
+  shared Actions cache, which PR workflows can read. It uses the private registry
+  cache only.
+- A package that has been made public can never be made private again. `ref`
+  checks through the API that the package is private before pushing, and
+  `release` checks again afterwards.
+
+**One-time setup** (the repository owner does this by hand before the first
+`ref/pin.env` lands):
+
+1. Create a classic personal access token with `write:packages` and
+   `delete:packages`, and store it as the repository secret `GHCR_TOKEN`.
+2. Create the `kakao-ref` package by pushing any small placeholder image to
+   `ghcr.io/<owner>/kakao-ref` with that token. Confirm it is **private**. Under
+   the package's "Manage Actions access", make sure no repository is listed. Don't
+   link the package to the repository.
+3. In the repository's Actions settings, require approval for workflow runs from
+   **all** outside contributors, not just first-time ones.
+4. Set a Packages spending limit.
+
+The workflow is `.github/workflows/ci.yml`. Each job turns on once the code it
+needs exists: `go.mod` for the candidate jobs, `testdata/corpus/` for the corpus
+jobs, and `ref/pin.env` for the reference jobs.
+
+**Cost.** Standard runners are free for public repositories. Image storage beyond
+the free allowance is on the order of a few dollars a month, which a Packages
+spending limit caps.
+
 ---
 
 ## 11. Scope and safety
@@ -332,9 +421,16 @@ tap-offset stability.
 - Only inspect accounts, clients, devices, and traffic that the operator owns or is
   explicitly authorized to test. Prefer disposable test accounts.
 - Never commit credentials, session material, tokens, device identifiers, phone
-  numbers, private messages, raw captures, decrypted databases, proprietary
-  binaries, or binary-specific addresses. Store sensitive lab artifacts outside the
-  repository and scan staged changes before every commit.
+  numbers, private messages, raw captures, decrypted databases, or proprietary
+  binaries. Store sensitive lab artifacts outside the repository and scan staged
+  changes before every commit.
+- Sanitized recordings (the replay corpus, §10.1) *are* in scope. Record only on
+  disposable accounts with synthetic conversations, and scrub every bundle before
+  commit. Raw, unscrubbed captures stay out.
+- Grey-box tap offsets and binary-specific addresses for the reference client
+  *are* in scope. They are needed to rebuild the reference, and they live next to
+  the tap code. Key every offset to the exact official-client version (and
+  installer hash) it applies to.
 - This repository documents an implementation-neutral methodology. Reproducible
   algorithms, storage/crypto recipes, necessary constants, and synthetic vectors
   that help authorized users interoperate are in scope; live secrets and
@@ -354,6 +450,9 @@ tap-offset stability.
   the oracle needs re-baselining.
 - **Business-logic parity** (the decision/trigger layer) is review-gated, not
   machine-exact; some divergence is legitimate implementation freedom.
+- **Scrub fidelity** — the reference must accept format-preserving placeholders
+  in place of real session material during replay. If it validates them (for
+  example, signature checks), the `ref` self-check needs a seam for this.
 - **Contract boundary placement** — the decrypted-packet + command/event boundary
   is the proposed seam; confirm it factors cleanly against the real decoded models.
 
