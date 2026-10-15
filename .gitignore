@@ -1,4 +1,9 @@
 .lab/
 *.pcap
 *.bin
+*.exe
 .DS_Store
+
+# Downloaded proprietary installer — never committed; only its SHA256 is tracked.
+vendor/*
+!vendor/.gitkeep
