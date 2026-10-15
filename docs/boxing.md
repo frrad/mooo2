@@ -120,6 +120,64 @@ To gate another script the same way, wrap it in `net-interpose.sh up
 [--allowlist FILE] [--fanout HOST:PORT]` … `net-interpose.sh down`; stop the
 client before `down`, since egress is ungated afterwards.
 
+## Clock and RNG seize (Tier 1 containment)
+
+The clock and the CSPRNG are the client's two nondeterministic inputs that are not
+files, so they are *seized*: chosen by us, captured, and replayed (DESIGN §5.1, §9;
+[`containment.md`](containment.md) "Clock", "RNG"). `seize.sh` wraps any command,
+normally `wine …`, with two `LD_PRELOAD` libraries on the Wine process tree:
+
+- **libfaketime** pins the wall clock to a start instant (`--time "@2025-01-01
+  00:00:00"`, default: now) and lets it advance in real time. It fakes the host
+  monotonic clock too, so `QueryPerformanceCounter` and `GetTickCount64` are covered
+  as well.
+- **`rng-seize.so`** ([`../docker/rng-seize.c`](../docker/rng-seize.c)) replaces
+  `getrandom()`, the one host call that Wine's `ntdll` makes for every Windows
+  CSPRNG API. With `--seed N`, each process gets a stream derived from the seed and
+  its exe name; `--log DIR` writes the bytes served to `DIR/<exe>.<pid>.rng`.
+
+Both live below the Windows modules, so the client binary and its protector see
+nothing.
+
+```sh
+# record: pin the inputs and save them
+seize.sh --time "@2025-01-01 00:00:00" --seed 0x5eed --capture /work/seize.env \
+         --log /work/rng -- wine "C:/.../KakaoTalk.exe"
+# replay: same inputs from the capture
+seize.sh --from /work/seize.env -- wine "C:/.../KakaoTalk.exe"
+```
+
+Stop `wineserver` first (`wineserver -k`). Processes that an already-running
+wineserver started keep their real clock and RNG.
+
+```sh
+make seize-spike  # = docker run --rm <image> verify-seize.sh
+```
+
+`verify-seize.sh` is account-free and needs no extra privileges. It runs
+`seize-probe.exe` (our own program,
+[`../docker/seize-probe.c`](../docker/seize-probe.c), built into the image), which
+reads every Windows clock and CSPRNG API. The probe runs three times: once with a
+pinned time and seed captured to an env file, once replayed from that file, and once
+with a different seed. The check passes if all of the following hold:
+
+- the clock reads the pinned date;
+- all six random APIs return identical bytes on replay and different bytes under
+  the other seed;
+- the unmodified client stays up seized, with both libraries mapped into
+  `KakaoTalk.exe`.
+
+It also lists how much entropy each process drew. Pre-login, the client takes a few
+hundred seeded bytes.
+
+**Limits.** In-process `RDTSC`/`RDRAND` never reach the host and stay unseized.
+32-bit Wine helpers cannot load the 64-bit libraries (ld.so prints a "wrong ELF
+class" note) and run unseized; the x64 client and its x64 helpers are seized. For
+the login spike, pin a *current* time: TLS certificate checks fail under a date
+outside the certificates' validity. A seeded client's keys are predictable by
+design, so seed only a box that logs in with a disposable account (DESIGN §11).
+Treat `.rng` logs and capture files as lab artifacts and do not commit them.
+
 ## Prefix snapshot / restore (Tier 1 containment)
 
 The filesystem/DB, the Wine registry, and the synthesized device identity all
