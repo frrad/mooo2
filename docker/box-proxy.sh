@@ -32,26 +32,49 @@ APPDIR="$(dirname "$EXE")"
 # DLL names the exe statically imports (lowercased, for matching).
 imports="$("$OBJDUMP" -p "$EXE" | awk '/DLL Name:/{print tolower($3)}')"
 
-# Pick the first client-bundled DLL that the exe statically imports.
+mkdir -p "$OUT_DIR"
+
+# Try each client-bundled DLL the exe statically imports, in name order, and keep
+# the first one for which a proxy actually builds with at least one name-based
+# forwarder. A candidate is skipped when it exports nothing by name (e.g. it is
+# import-by-ordinal only, which name-based forwarders cannot satisfy) or when the
+# proxy fails to link; see "Known limitation" in docs/inject-spike.md.
 target=""
+tried=0
 while IFS= read -r f; do
   b="$(basename "$f")"
   lb="$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')"
-  if printf '%s\n' "$imports" | grep -Fqx "$lb"; then target="$b"; break; fi
+  printf '%s\n' "$imports" | grep -Fqx "$lb" || continue
+  tried=$((tried + 1))
+
+  base="${b%.*}"
+  origmod="${base}__orig"
+  def="$OUT_DIR/${base}.def"
+
+  echo ">> box-proxy: candidate '$b' (forwards -> ${origmod}.dll)"
+  if ! "$GENDEF_FWD" "$APPDIR/$b" "$origmod" > "$def" 2>/dev/null; then
+    echo ">> box-proxy: '$b': forwarder generation failed; trying next" >&2
+    continue
+  fi
+  nfwd=$(($(wc -l < "$def") - 1))
+  if [ "$nfwd" -lt 1 ]; then
+    echo ">> box-proxy: '$b': zero named exports (ordinal-only?); trying next" >&2
+    continue
+  fi
+  if ! "$GCC" -O2 -shared -o "$OUT_DIR/$b" "$PROBE_SRC" "$def" -luser32 2>/dev/null; then
+    echo ">> box-proxy: '$b': proxy failed to link; trying next" >&2
+    continue
+  fi
+  echo ">> forwarders generated: $nfwd exports"
+  target="$b"
+  break
 done < <(find "$APPDIR" -maxdepth 1 -iname '*.dll' | sort)
 
-[ -n "$target" ] || { echo "box-proxy: no client-bundled DLL is statically imported by the exe" >&2; exit 1; }
+if [ -z "$target" ]; then
+  echo "box-proxy: no usable client-bundled static import ($tried candidate(s) tried)" >&2
+  exit 1
+fi
 
-base="${target%.*}"
-origmod="${base}__orig"
-mkdir -p "$OUT_DIR"
-def="$OUT_DIR/${base}.def"
-
-echo ">> box-proxy: proxying bundled static import '$target' (forwards -> ${origmod}.dll)"
-"$GENDEF_FWD" "$APPDIR/$target" "$origmod" > "$def"
-echo ">> forwarders generated: $(($(wc -l < "$def") - 1)) exports"
-
-"$GCC" -O2 -shared -o "$OUT_DIR/$target" "$PROBE_SRC" "$def" -luser32
 printf '%s\n' "$target" > /home/wine/.kakao_proxy_target
 
 echo ">> box-proxy: built proxy $OUT_DIR/$target (recorded target: $target)"
