@@ -53,9 +53,11 @@ ENV WINEPREFIX=/home/wine/.wine \
 # --- Boxing scripts + grey-box tap seam ----------------------------------------
 COPY docker/box-install.sh docker/entrypoint.sh docker/verify-launch.sh \
      docker/prefix-snapshot.sh docker/prefix-restore.sh docker/prefix-diff.sh \
+     docker/prefix-state.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/entrypoint.sh /usr/local/bin/verify-launch.sh \
-             /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh
+             /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh \
+             /usr/local/bin/prefix-state.sh
 COPY patches/ /opt/patches/
 
 # --- Install the client into the prefix at build time --------------------------

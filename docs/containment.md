@@ -150,6 +150,43 @@ in any internal address.
   `wineserver` so spawns stay in the box; keep egress default-deny so a crash
   reporter cannot phone home. No extra seam needed beyond the container itself.
 
+## Validating the state set
+
+The channel list above and the `prefix-state.sh` state set are *declared* — a
+claim that these are the only places the client reads state-bearing input. That
+claim has to be checked, not assumed: the client could read something we did not
+anticipate (another registry hive, a file outside the Kakao tree, a host path) and
+we would see a silent parity bug later, not a flag. Because everything runs under
+Wine on Linux, every access ultimately becomes a host syscall or a Wine-layer
+event, so it is enumerable at runtime. Methods, cheapest first:
+
+1. **Wine's own channels — `WINEDEBUG=+file,+reg` (start here).** Wine logs every
+   file open and registry access with the resolved path, in Windows-path terms
+   (more meaningful than raw host paths) and **without `ptrace`**, so it is the
+   least likely to perturb the protected process. First pass: drive a scenario,
+   collect the log, bucket each access as *base* (immutable), *state* (in our set),
+   *host-env* (neutralized elsewhere — clock, RNG, locale, timezone, fonts), or
+   *unexpected* (investigate).
+2. **Kernel-level ground truth — eBPF/`bpftrace` on the `openat`/`read`
+   tracepoints**, scoped to the Wine process tree. Catches raw syscalls that bypass
+   libc (Wine's `ntdll` issues some directly), needs no `ptrace`, and is invisible
+   to anti-debug checks — at the cost of a privileged (`CAP_BPF`) container. This is
+   the authoritative enumerator.
+3. **`strace -f` on file syscalls.** Simplest ground truth, but it attaches via
+   `ptrace`; the protector may treat that as a debugger (see below), so run it from
+   launch on a disposable account and treat a behavior change as itself a signal.
+4. **Enforce, don't just observe (the real guarantee).** Once the layered prefix
+   lands, mount the base **read-only** and present only the declared paths; a read
+   outside the set then surfaces as `ENOENT`/`EACCES` rather than succeeding
+   silently, and `fanotify` can log every open against the prefix mount. This turns
+   "is the set complete?" from a question into an enforced invariant with violations
+   logged — which is the containment goal anyway.
+
+Expect legitimate host noise (fonts, timezone, `/dev/urandom`, `/etc/resolv.conf`):
+the useful question is not "what files are touched" but "is anything *state-,
+identity-, or determinism-bearing* touched that we have not captured or seized."
+Buckets (1) and (4) answer exactly that.
+
 ## Anti-tamper: why we start Tier-1-only
 
 The shipped client is **packed/protected by a commercial protector** (a Themida-
@@ -257,12 +294,16 @@ this as plan B; do not build it unless the spike forces it.
 - **The plan — Tier 1 only (out-of-process, low anti-tamper risk), in rough
   order:**
   1. Prefix snapshot/restore for filesystem + registry + device identity.
-     **Done** — `prefix-snapshot.sh` / `prefix-restore.sh` / `prefix-diff.sh`
-     (see [`boxing.md`](boxing.md)).
+     **Done** — full-prefix `prefix-snapshot.sh` / `prefix-restore.sh` /
+     `prefix-diff.sh` for re-baselining, and `prefix-state.sh` for the fast
+     per-run loop over just the ~3 MB mutable state set (see [`boxing.md`](boxing.md)).
   2. Network interpose with default-deny egress + ingress fan-out (also the
      Shadow-mode gate, DESIGN §8).
   3. Clock seize (`libfaketime`) and RNG seize (`ntdll` shim) — the latter also
      makes captured traffic decryptable via a candidate key schedule.
+  4. Layered prefix: immutable read-only base + writable state layer on a volume,
+     plus a dedicated payload dir for a future tap DLL (see [`boxing.md`](boxing.md)).
+     Structural; pairs with (2)/(3) and pre-positions Tier 2.
 - **Future work — Tier 2 (in-process), explicitly out of scope for now.** Only
   after Tier 1 is delivering, and gated on a runtime anti-tamper check: attempt one
   crypto-seam tap, confirm the protected process tolerates it, and only then

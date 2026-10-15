@@ -89,9 +89,54 @@ prefix-restore.sh /work/baseline.tar
   path+size/hash level only. Decoding the records themselves is the Tier 2 storage
   tap (future work).
 
-A full prefix snapshot is ~1.5 GB / ~13 s uncompressed on the current client — fine
-for a bench, heavy for CI. Compression or an overlayfs lower layer is a future
-optimization.
+### State-only snapshots (`prefix-state.sh`)
+
+A full prefix snapshot is ~1.5 GB / ~13 s uncompressed on the current client,
+because it includes the immutable base — Wine's own `C:\windows` (~1.4 GB) and the
+installed client (~135 MB), which are identical every run and already live in the
+image's read-only layers. The only state the client's output actually depends on is
+the **registry + the Kakao app-data tree: ~3 MB.** `prefix-state.sh` operates on
+exactly that set:
+
+```sh
+prefix-state.sh snapshot /work/state.tar      # ~3 MB, not 1.5 GB
+prefix-state.sh diff     /work/state.tar       # path+size; add --hash for content
+prefix-state.sh restore  /work/state.tar       # resets state only; base untouched
+```
+
+The state set (single source of truth, in the script): `system.reg`, `user.reg`,
+`userdef.reg`, and `drive_c/users/*/AppData/{Local,Roaming,LocalLow}/Kakao` (plus
+`drive_c/ProgramData/Kakao` if present); `Temp` is excluded as run noise. `restore`
+clears those paths and extracts the baseline over them, leaving the base in place —
+verified: a tampered base file survives a state restore.
+
+Use `prefix-state.sh` for the per-run snapshot/restore/diff loop. Use the
+full-prefix `prefix-snapshot.sh` only to re-baseline the whole box on a new client
+release (DESIGN §9).
+
+**Is the state set complete?** It is a *declared* set, validated by observation —
+see "Validating the state set" in [`containment.md`](containment.md) for how to
+enumerate what the client actually reads at runtime and confirm nothing
+state-bearing falls outside it.
+
+### Future: a layered prefix
+
+The state-only tool makes the snapshot loop cheap, but the prefix is still one
+directory. The structural version splits it, following the Matrix–WeChat
+`wechat-box` precedent (immutable Wine base image + mounted-in payloads):
+
+- **Immutable lower layer** — Wine + installed client, baked into the image,
+  mounted **read-only**. A read-only base is also what makes "did the client try to
+  write/read outside its state?" observable (an `EACCES`/`EROFS` is a signal).
+- **Writable upper layer** — the state set, on a real volume or `tmpfs` (not on the
+  container's own overlay — overlay-on-overlay fails; keep frequently-written state
+  on a volume). Snapshot/restore then touches only this small layer.
+- **A dedicated payload dir** (e.g. `drive_c/injector/`, as `injector-box` uses) for
+  a future grey-box tap DLL, so a version-matched tap drops in and is swapped with
+  zero prefix churn.
+
+This pairs naturally with the network-interpose / clock-RNG work and pre-positions
+the Tier 2 payload dir. Not built yet; tracked in `containment.md`'s roadmap.
 
 ## Scope and safety
 
