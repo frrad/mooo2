@@ -22,5 +22,6 @@ is what ships.
 ## Status
 
 Draft proposal. No implementation yet. This repository contains no credentials,
-raw captures, device identifiers, or decompiled source. Grey-box tap offsets
-and sanitized recordings are allowed. See the scope-and-safety section of `DESIGN.md`.
+raw captures, device identifiers, proprietary binaries, or decompiled source.
+Grey-box tap offsets and sanitized recordings are allowed. See the
+scope-and-safety section of `DESIGN.md`.

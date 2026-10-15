@@ -91,21 +91,28 @@ jobs:
 
   # Builds the reference image and checks it reproduces the corpus. Only a
   # push to main publishes the image; PR builds stay local to the runner.
+  #
+  # Registry access uses the GHCR_TOKEN secret, never GITHUB_TOKEN, and the
+  # repository has no Actions access to the package (DESIGN.md §10.1). A fork
+  # PR can rewrite this workflow, so the `trusted` check only skips the job
+  # cleanly. The real guard is that fork runs get no secrets.
   ref:
     needs: detect
     if: needs.detect.outputs.ref == 'true' && needs.detect.outputs.trusted == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Package must be private
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: ref/check-private.sh
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
       - id: pin
         run: |
           {
@@ -132,7 +139,8 @@ jobs:
           docker tag kakao-ref:local "$REF_IMAGE:$GITHUB_SHA"
           docker push "$REF_IMAGE:$GITHUB_SHA"
 
-  # Moves kakao-ref:main only after every check for this commit has passed.
+  # Moves kakao-ref:main only after every check that ran for this commit has
+  # passed (skipped jobs are fine).
   release:
     needs: [detect, go-test, corpus-lint, parity, ref]
     if: >-
@@ -140,31 +148,35 @@ jobs:
       needs.ref.result == 'success' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
       - run: docker buildx imagetools create -t "$REF_IMAGE:main" "$REF_IMAGE:$GITHUB_SHA"
-      # Keeps the newest versions (by push time), so :main (newest <sha>) and
-      # :buildcache (rewritten on every main build) always survive.
-      - name: Prune old images
+      # Each main build leaves the previous :buildcache untagged.
+      - name: Prune untagged versions
         uses: actions/delete-package-versions@v5
         with:
+          token: ${{ secrets.GHCR_TOKEN }}
+          package-name: kakao-ref
+          package-type: container
+          min-versions-to-keep: 0
+          delete-only-untagged-versions: 'true'
+      # Keeps the newest 6 tagged versions: :buildcache plus the last 5
+      # <sha> builds, one of which is :main. Main runs are serialized, so the
+      # newest versions are always this run's.
+      - name: Prune old builds
+        uses: actions/delete-package-versions@v5
+        with:
+          token: ${{ secrets.GHCR_TOKEN }}
           package-name: kakao-ref
           package-type: container
           min-versions-to-keep: 6
-      # A public package can never be made private again. Fail loudly if it
-      # ever becomes pullable without credentials.
-      - name: Image must not be public
-        run: |
-          docker logout ghcr.io
-          if docker pull "$REF_IMAGE:main" >/dev/null 2>&1; then
-            echo "::error::$REF_IMAGE is publicly pullable"
-            exit 1
-          fi
+      - name: Package must still be private
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: ref/check-private.sh

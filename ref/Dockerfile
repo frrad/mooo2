@@ -16,6 +16,9 @@ RUN dpkg --add-architecture i386 \
 ENV WINEPREFIX=/opt/wine WINEDEBUG=-all
 RUN xvfb-run -a wineboot --init && wineserver -w
 
+# The installer may launch the client when it finishes, which would keep
+# wineserver alive forever. Bound it, kill Wine, then check that the client
+# actually got installed.
 FROM wine AS client
 ARG KAKAO_VERSION
 ARG KAKAO_URL
@@ -23,8 +26,9 @@ ARG KAKAO_SHA256
 RUN test -n "$KAKAO_VERSION" && test -n "$KAKAO_URL" && test -n "$KAKAO_SHA256" \
  && curl -fsSL "$KAKAO_URL" -o /tmp/setup.exe \
  && echo "$KAKAO_SHA256  /tmp/setup.exe" | sha256sum -c - \
- && xvfb-run -a wine /tmp/setup.exe /S \
- && wineserver -w \
+ && { timeout 900 xvfb-run -a wine /tmp/setup.exe /S || true; } \
+ && { wineserver -k || true; } \
+ && find "$WINEPREFIX/drive_c" -iname KakaoTalk.exe | grep -q . \
  && rm /tmp/setup.exe
 LABEL org.opencontainers.image.version="$KAKAO_VERSION"
 

@@ -4,7 +4,7 @@
 **Scope:** interoperability research methodology for a clean-room KakaoTalk
 secondary-device client. No credentials, raw captures, device identifiers, or
 decompiled source belong in this document or this repository. Grey-box tap
-offsets are in scope (see §11).
+offsets and sanitized recordings are in scope (see §11).
 
 ---
 
@@ -358,13 +358,14 @@ not in CI.
 | Job | Runs on | Needs | Checks |
 |---|---|---|---|
 | `go-test` | every PR, `main` | — | Unit tests and lint for the candidate. |
-| `corpus-lint` | every PR, `main` | corpus | No unscrubbed values: patterns for tokens, phone numbers, device identifiers, and anything not in the placeholder set. |
+| `corpus-lint` | every PR, `main` | corpus | Denylist backstop for the scrubber. It flags phone numbers, emails, long hex or base64 strings, UUIDs, and numeric `*Id` fields, unless they match the placeholder allowlist. Binary files fail, so the corpus must be text. |
 | `parity` | every PR, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
-| `ref` | same-repo PRs, `main` | registry cache, corpus | Builds the image, then the reference replays the sanitized corpus and must reproduce its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. On `main` it then pushes `kakao-ref:<sha>`. Build and self-check share a job because PR builds are never pushed. |
-| `release` | `main` | — | If all jobs pass, it retags `kakao-ref:<sha>` as `kakao-ref:main` and prunes all but the last few `<sha>` tags. |
+| `ref` | same-repo PRs, `main` | registry cache, corpus | Builds the image, then the reference replays the sanitized corpus and must reproduce its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. On `main` it then pushes `kakao-ref:<sha>`. Before pushing, it checks that the package is private. Build and self-check share a job because PR builds are never pushed. |
+| `release` | `main` | — | If every job that ran passed (skipped jobs are fine), it retags `kakao-ref:<sha>` as `kakao-ref:main`, prunes to the last 5 builds, and re-checks that the package is private. |
 
-Every merge to `main` rebuilds the image and ships the code, taps, corpus, and
-image together under one commit SHA. Same-repo PRs build the image without
+Each `main` build ships the code, taps, corpus, and image together under one
+commit SHA. `main` runs are serialized. If several merges queue up, GitHub
+skips the intermediate runs and builds only the newest. Same-repo PRs build the image without
 pushing and run the same checks, so a broken tap fails before merge. Fork PRs run
 everything except `ref` and `release`.
 
@@ -373,17 +374,37 @@ CI uses. Each recording then goes through the scrubber before it is committed.
 Bumping the client version means updating the offsets, re-recording, and
 committing a new corpus directory, all in one PR.
 
-**Public-repo guards.** Everything is public except the image.
+**Public-repo guards.** Everything is public except the image. A PR's workflow
+runs from the PR's own copy of the workflow file, so a fork can rewrite any `if:`
+condition. The guards therefore rely on credentials, not on workflow logic.
 
-- `ref` and `release` run only when the PR's head repository is this repository.
-  Outside contributors' workflow runs require approval.
-- Only this repository has access to the image package. Only `ref` and
-  `release` get `packages: write`, and only `main` pushes.
+- The registry is reached only with the `GHCR_TOKEN` secret, never with
+  `GITHUB_TOKEN`, and the repository has no Actions access to the package.
+  Fork runs get no secrets, so even a rewritten workflow cannot pull the image
+  or its build cache. The `trusted` check in the workflow only skips `ref`
+  cleanly for forks.
+- Same-repo branches do get the secret, so the convention that only `main`
+  pushes is enforced by review, not by GitHub. Only people with write access can
+  push same-repo branches.
 - The image is never uploaded as a workflow artifact, and its build never uses the
   shared Actions cache, which PR workflows can read. It uses the private registry
   cache only.
-- A package that has been made public can never be made private again. A CI step
-  checks that an anonymous pull of the image fails.
+- A package that has been made public can never be made private again. `ref`
+  checks through the API that the package is private before pushing, and
+  `release` checks again afterwards.
+
+**One-time setup** (the repository owner does this by hand before the first
+`ref/pin.env` lands):
+
+1. Create a classic personal access token with `write:packages` and
+   `delete:packages`, and store it as the repository secret `GHCR_TOKEN`.
+2. Create the `kakao-ref` package by pushing any small placeholder image to
+   `ghcr.io/<owner>/kakao-ref` with that token. Confirm it is **private**. Under
+   the package's "Manage Actions access", make sure no repository is listed. Don't
+   link the package to the repository.
+3. In the repository's Actions settings, require approval for workflow runs from
+   **all** outside contributors, not just first-time ones.
+4. Set a Packages spending limit.
 
 The workflow is `.github/workflows/ci.yml`. Each job turns on once the code it
 needs exists: `go.mod` for the candidate jobs, `testdata/corpus/` for the corpus
