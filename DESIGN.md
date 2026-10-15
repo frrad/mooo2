@@ -2,7 +2,7 @@
 
 **Status:** draft / proposal
 **Scope:** interoperability research methodology for a clean-room KakaoTalk
-secondary-device client. No credentials, captures, device identifiers, or
+secondary-device client. No credentials, raw captures, device identifiers, or
 decompiled source belong in this document or this repository. Grey-box tap
 offsets are in scope (see §11).
 
@@ -331,11 +331,12 @@ CI uses **replay only** (§8, §9). It never talks to the live server and needs 
 account secrets. Recording is a manual step that runs on the operator's machine,
 not in CI.
 
-**Artifacts.** There are two private artifacts, both stored as private packages in
-the GitHub Container Registry (GHCR):
+**Artifacts.**
 
-- **Reference image** (`kakao-ref`). It has three layers, and the ones that change
-  most often sit on top:
+- **Reference image** (`kakao-ref`). This is the only private artifact, because it
+  contains the official client. It is stored as a private GitHub Container
+  Registry (GHCR) package and has three layers, with the ones that change most
+  often on top:
   1. Wine base.
   2. The official installer, downloaded at a pinned `KAKAO_VERSION` and verified
      against a pinned SHA-256, then silently installed. A version bump is a
@@ -344,49 +345,50 @@ the GitHub Container Registry (GHCR):
   3. The grey-box taps plus the offset table for that exact version (§11). This
      layer is rebuilt on every change. Layers 1–2 come from a private registry
      build cache, so a tap change rebuilds in minutes.
-- **Corpus** (`kakao-corpus`). These are recorded contract bundles (§6), pushed as
-  an OCI artifact and keyed to the client version they were recorded on. The repo
-  pins the corpus by digest in a lock file. Recordings come from disposable
-  accounts, but they still contain raw server traffic, so §11 keeps them out of
-  the repository.
+- **Corpus** (`testdata/corpus/<kakao-version>/`). These are recorded contract
+  bundles (§6), committed to the repository. Recordings come from disposable
+  accounts and are sanitized before commit (§11). The scrubber replaces session
+  material, tokens, device identifiers, phone numbers, and account IDs with
+  stable, format-preserving placeholders. It uses the same placeholder for a
+  value everywhere in the bundle, inputs and outputs alike, so replay stays
+  deterministic.
 
 **Jobs.**
 
 | Job | Runs on | Needs | Checks |
 |---|---|---|---|
 | `go-test` | every PR, `main` | — | Unit tests and lint for the candidate. |
+| `corpus-lint` | every PR, `main` | corpus | No unscrubbed values: patterns for tokens, phone numbers, device identifiers, and anything not in the placeholder set. |
+| `parity` | every PR, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
 | `ref-build` | same-repo PRs, `main` | registry cache | The image builds. On `main` it pushes `kakao-ref:<sha>`. |
-| `ref-selfcheck` | same-repo PRs, `main` | image, corpus | The reference replays the corpus and reproduces its own recorded outputs. This validates the taps and input-pinning shims after every tap change. |
-| `parity` | same-repo PRs, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
+| `ref-selfcheck` | same-repo PRs, `main` | image, corpus | The reference replays the sanitized corpus and reproduces its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. |
 | `release` | `main` | — | If all jobs pass, it retags `kakao-ref:<sha>` as `kakao-ref:main` and prunes all but the last few `<sha>` tags. |
 
-Every merge to `main` rebuilds the image and ships the code, taps, and image
-together under one commit SHA. Same-repo PRs build the image without pushing and
-run the same checks, so a broken tap fails before merge.
+Every merge to `main` rebuilds the image and ships the code, taps, corpus, and
+image together under one commit SHA. Same-repo PRs build the image without
+pushing and run the same checks, so a broken tap fails before merge. Fork PRs run
+everything except the two reference jobs.
 
 **Recording** runs locally against a disposable account, with the same image the
-CI uses. Bumping the client version means re-recording, updating the offsets, and
-pushing a new corpus version, all in one PR.
+CI uses. Each recording then goes through the scrubber before it is committed.
+Bumping the client version means updating the offsets, re-recording, and
+committing a new corpus directory, all in one PR.
 
-**Public-repo guards.** The repository is public, but the image (it contains the
-official client) and the corpus are not.
+**Public-repo guards.** Everything is public except the image.
 
-- Jobs that touch the image or the corpus run only when the PR's head repository
-  is this repository. Fork PRs get `go-test` only. Outside contributors' workflow
-  runs require approval.
-- Only this repository has access to the private packages, with `packages: write`
+- The reference jobs run only when the PR's head repository is this repository.
+  Outside contributors' workflow runs require approval.
+- Only this repository has access to the image package, with `packages: write`
   only for `ref-build` on `main` and read access everywhere else.
 - The image is never uploaded as a workflow artifact, and its build never uses the
   shared Actions cache, which PR workflows can read. It uses the private registry
   cache only.
-- Logs and artifacts are public. Parity output is pass/fail plus field-level diffs
-  of synthetic or redacted data. Raw corpus payloads are never printed.
 - A package that has been made public can never be made private again. A CI step
   checks that an anonymous pull of the image fails.
 
-**Cost.** Standard runners are free for public repositories. Image plus corpus
-storage beyond the free allowance is on the order of a few dollars a month, which
-a Packages spending limit caps.
+**Cost.** Standard runners are free for public repositories. Image storage beyond
+the free allowance is on the order of a few dollars a month, which a Packages
+spending limit caps.
 
 ---
 
@@ -398,6 +400,9 @@ a Packages spending limit caps.
   numbers, private messages, raw captures, decrypted databases, or proprietary
   binaries. Store sensitive lab artifacts outside the repository and scan staged
   changes before every commit.
+- Sanitized recordings (the replay corpus, §10.1) *are* in scope. Record only on
+  disposable accounts with synthetic conversations, and scrub every bundle before
+  commit. Raw, unscrubbed captures stay out.
 - Grey-box tap offsets and binary-specific addresses for the reference client
   *are* in scope. They are needed to rebuild the reference, and they live next to
   the tap code. Key every offset to the exact official-client version (and
@@ -421,6 +426,9 @@ a Packages spending limit caps.
   the oracle needs re-baselining.
 - **Business-logic parity** (the decision/trigger layer) is review-gated, not
   machine-exact; some divergence is legitimate implementation freedom.
+- **Scrub fidelity** — the reference must accept format-preserving placeholders
+  in place of real session material during replay. If it validates them (for
+  example, signature checks), `ref-selfcheck` needs a seam for this.
 - **Contract boundary placement** — the decrypted-packet + command/event boundary
   is the proposed seam; confirm it factors cleanly against the real decoded models.
 
