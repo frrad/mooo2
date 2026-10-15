@@ -44,6 +44,11 @@ KAKAO_HOOK_OVERRIDES  →  WINEDLLOVERRIDES  →  Wine loads the hook DLL into t
                                               client process at startup
 ```
 
+> **Refinement from Spike A** (see [`inject-spike.md`](inject-spike.md)):
+> `WINEDLLOVERRIDES` sets a module's *native/builtin load order* but does **not**
+> by itself force the load into the process. The load is triggered by proxying a
+> client-bundled import; the override is still used to force a seam module native.
+
 The entrypoint already does the wiring and defaults to empty (so the unmodified
 client runs for the §13.1 launch spike):
 
@@ -168,6 +173,12 @@ action.
 Two staged checks, cheapest first:
 
 ### Spike A — does an injected DLL load into the client under Wine?
+
+> **Implemented and passing** — see [`inject-spike.md`](inject-spike.md) and
+> `make inject-spike`. Finding: `WINEDLLOVERRIDES` alone does not *trigger* a load,
+> and `AppInit_DLLs` is not honored by Wine; the working vector is **proxying a
+> client-bundled static import** (forwarding its exports to a renamed original).
+> The paragraph below is the original framing; inject-spike.md is authoritative.
 
 The minimal question from DESIGN's §10 spirit ("the single biggest unknown is cheap
 to resolve"): can a `WINEDLLOVERRIDES`-selected DLL be loaded into the client
