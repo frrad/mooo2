@@ -193,6 +193,50 @@ outside the certificates' validity. A seeded client's keys are predictable by
 design, so seed only a box that logs in with a disposable account (DESIGN §11).
 Treat `.rng` logs and capture files as lab artifacts and do not commit them.
 
+## Layered prefix (Tier 1 containment)
+
+`prefix-layer.sh` runs the client from a prefix split into separately mounted
+layers. This follows the Matrix–WeChat `wechat-box` precedent: an immutable Wine
+base image plus mounted-in payloads.
+
+| Layer | Where | What |
+|-------|-------|------|
+| **Base** (immutable) | the image's installed prefix, `/home/wine/.wine` | Wine's `C:\windows` and the installed client. These are the `BASE_PATHS` in `prefix-state.sh`, which `prefix-guard.sh` uses too. They are **symlinked** into the state layer, never copied. With `docker run --read-only` the base is read-only at the filesystem level, so a write fails `EROFS`. |
+| **State** (writable) | `/var/lib/kakao/prefix`, a **tmpfs or volume** | The prefix root (registry hives, `dosdevices`) plus `users` and `ProgramData`, seeded from the base on first use (~3 MB). It is not on the container's own overlay, because overlay-on-overlay breaks. The whole `STATE_GLOBS` set lives here, so `prefix-state.sh` snapshot/restore/diff touch only this layer. |
+| **Payload** | `/var/lib/kakao/payload`, linked as `C:\injector` | Empty by default. A future version-matched tap DLL is mounted here and swapped without touching the prefix. |
+
+```sh
+make layered-spike
+# = docker run --rm --read-only --tmpfs /tmp:exec \
+#     --tmpfs /var/lib/kakao/prefix:exec,uid=1000,gid=1000 <image> verify-layered.sh
+
+# persistent state on a named volume, a payload mounted in, any command:
+docker run --rm --read-only --tmpfs /tmp:exec \
+  -v kakao-state:/var/lib/kakao/prefix -v "$PWD/taps:/var/lib/kakao/payload:ro" \
+  <image> prefix-layer.sh run -- verify-launch.sh
+```
+
+`prefix-layer.sh run` assembles the state layer if it is empty (`--fresh` reseeds
+it), checks the invariants, then execs the command with `WINEPREFIX` pointing at
+the state layer and `KAKAO_EXE` set to the client inside it. `verify-launch.sh`
+honours `KAKAO_EXE`. The invariants are:
+
+- the base trees are linked;
+- every state path resolves inside the state layer;
+- the state layer is not overlayfs;
+- `C:\injector` points at the payload dir.
+
+Mount tmpfs layers with `exec`, because Wine maps PE images from them.
+
+`verify-layered.sh` is account-free and passes if all of these hold:
+
+- the invariants hold;
+- writing into the base fails, both directly and through the prefix;
+- the **unmodified** client stays up from the layered prefix;
+- its writes land in the state layer, where `prefix-state.sh snapshot` captures them.
+
+Run without `--read-only`, it fails and says so.
+
 ## Prefix snapshot / restore (Tier 1 containment)
 
 The filesystem/DB, the Wine registry, and the synthesized device identity all
@@ -376,8 +420,7 @@ payloads):
   a future grey-box tap DLL, so a version-matched tap drops in and is swapped with
   zero prefix churn.
 
-This pairs naturally with the network-interpose / clock-RNG work and pre-positions
-the Tier 2 payload dir. Not built yet; tracked in `containment.md`'s roadmap.
+**Built** as `prefix-layer.sh`; see "Layered prefix" above.
 
 ## Scope and safety
 

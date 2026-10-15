@@ -67,6 +67,7 @@ COPY docker/box-install.sh docker/box-proxy.sh docker/entrypoint.sh \
      docker/prefix-guard.sh docker/prefix-guard.py \
      docker/net-interpose.sh docker/net-interpose.py docker/verify-net.sh \
      docker/seize.sh docker/verify-seize.sh \
+     docker/prefix-layer.sh docker/verify-layered.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/local/bin/entrypoint.sh \
              /usr/local/bin/verify-launch.sh /usr/local/bin/verify-inject.sh \
@@ -75,7 +76,12 @@ RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/loca
              /usr/local/bin/prefix-guard.sh /usr/local/bin/prefix-guard.py \
              /usr/local/bin/net-interpose.sh /usr/local/bin/net-interpose.py \
              /usr/local/bin/verify-net.sh \
-             /usr/local/bin/seize.sh /usr/local/bin/verify-seize.sh
+             /usr/local/bin/seize.sh /usr/local/bin/verify-seize.sh \
+             /usr/local/bin/prefix-layer.sh /usr/local/bin/verify-layered.sh
+# Layered prefix mount points (prefix-layer.sh): the state layer (mount a volume
+# or tmpfs here) and the payload dir for a future tap DLL (C:\injector).
+RUN mkdir -p /var/lib/kakao/prefix /var/lib/kakao/payload \
+ && chown wine:wine /var/lib/kakao/prefix /var/lib/kakao/payload
 # Egress allowlist for the interpose: empty (deny all) by default. Mount over it
 # for the login spike (docs/boxing.md).
 COPY docker/net-allowlist /etc/kakao/net-allowlist
