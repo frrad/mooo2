@@ -360,14 +360,13 @@ not in CI.
 | `go-test` | every PR, `main` | — | Unit tests and lint for the candidate. |
 | `corpus-lint` | every PR, `main` | corpus | No unscrubbed values: patterns for tokens, phone numbers, device identifiers, and anything not in the placeholder set. |
 | `parity` | every PR, `main` | corpus | The candidate replays the corpus, and the comparator (§7) diffs it against the recorded outputs. |
-| `ref-build` | same-repo PRs, `main` | registry cache | The image builds. On `main` it pushes `kakao-ref:<sha>`. |
-| `ref-selfcheck` | same-repo PRs, `main` | image, corpus | The reference replays the sanitized corpus and reproduces its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. |
+| `ref` | same-repo PRs, `main` | registry cache, corpus | Builds the image, then the reference replays the sanitized corpus and must reproduce its recorded outputs. This validates the taps, the input-pinning shims, and the scrubber after every change. On `main` it then pushes `kakao-ref:<sha>`. Build and self-check share a job because PR builds are never pushed. |
 | `release` | `main` | — | If all jobs pass, it retags `kakao-ref:<sha>` as `kakao-ref:main` and prunes all but the last few `<sha>` tags. |
 
 Every merge to `main` rebuilds the image and ships the code, taps, corpus, and
 image together under one commit SHA. Same-repo PRs build the image without
 pushing and run the same checks, so a broken tap fails before merge. Fork PRs run
-everything except the two reference jobs.
+everything except `ref` and `release`.
 
 **Recording** runs locally against a disposable account, with the same image the
 CI uses. Each recording then goes through the scrubber before it is committed.
@@ -376,15 +375,19 @@ committing a new corpus directory, all in one PR.
 
 **Public-repo guards.** Everything is public except the image.
 
-- The reference jobs run only when the PR's head repository is this repository.
+- `ref` and `release` run only when the PR's head repository is this repository.
   Outside contributors' workflow runs require approval.
-- Only this repository has access to the image package, with `packages: write`
-  only for `ref-build` on `main` and read access everywhere else.
+- Only this repository has access to the image package. Only `ref` and
+  `release` get `packages: write`, and only `main` pushes.
 - The image is never uploaded as a workflow artifact, and its build never uses the
   shared Actions cache, which PR workflows can read. It uses the private registry
   cache only.
 - A package that has been made public can never be made private again. A CI step
   checks that an anonymous pull of the image fails.
+
+The workflow is `.github/workflows/ci.yml`. Each job turns on once the code it
+needs exists: `go.mod` for the candidate jobs, `testdata/corpus/` for the corpus
+jobs, and `ref/pin.env` for the reference jobs.
 
 **Cost.** Standard runners are free for public repositories. Image storage beyond
 the free allowance is on the order of a few dollars a month, which a Packages
@@ -428,7 +431,7 @@ spending limit caps.
   machine-exact; some divergence is legitimate implementation freedom.
 - **Scrub fidelity** — the reference must accept format-preserving placeholders
   in place of real session material during replay. If it validates them (for
-  example, signature checks), `ref-selfcheck` needs a seam for this.
+  example, signature checks), the `ref` self-check needs a seam for this.
 - **Contract boundary placement** — the decrypted-packet + command/event boundary
   is the proposed seam; confirm it factors cleanly against the real decoded models.
 

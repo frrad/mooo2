@@ -1,0 +1,170 @@
+# CI pipeline. See DESIGN.md §10.1.
+#
+# Each job stays off until the code it depends on exists. The `detect` job
+# reports which parts of the repo are present:
+#   go.mod                   → go-test, parity
+#   testdata/corpus/         → corpus-lint, parity, reference self-check
+#   ref/pin.env              → ref, release
+#
+# The reference image contains the official client, so it is private, and its
+# jobs never run for PRs from forks.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel superseded PR runs; let main runs finish in order.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REF_IMAGE: ghcr.io/${{ github.repository_owner }}/kakao-ref
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.d.outputs.go }}
+      corpus: ${{ steps.d.outputs.corpus }}
+      ref: ${{ steps.d.outputs.ref }}
+      trusted: ${{ steps.d.outputs.trusted }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          has() { if [ -e "$1" ]; then echo true; else echo false; fi; }
+          {
+            echo "go=$(has go.mod)"
+            echo "corpus=$(has testdata/corpus)"
+            echo "ref=$(has ref/pin.env)"
+            # Only this repository's own branches may touch the private image.
+            if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+              echo trusted=true
+            else
+              echo trusted=false
+            fi
+          } | tee -a "$GITHUB_OUTPUT"
+
+  go-test:
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  corpus-lint:
+    needs: detect
+    if: needs.detect.outputs.corpus == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/corpus-lint.sh testdata/corpus
+
+  parity:
+    needs: detect
+    if: needs.detect.outputs.go == 'true' && needs.detect.outputs.corpus == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Candidate replays the corpus; the comparator diffs against the recorded
+      # outputs. Output must stay at pass/fail plus field-level diffs: logs are
+      # public.
+      - run: go run ./cmd/parity testdata/corpus
+
+  # Builds the reference image and checks it reproduces the corpus. Only a
+  # push to main publishes the image; PR builds stay local to the runner.
+  ref:
+    needs: detect
+    if: needs.detect.outputs.ref == 'true' && needs.detect.outputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: pin
+        run: |
+          {
+            echo 'args<<EOF'
+            grep -E '^[A-Z0-9_]+=' ref/pin.env
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      # Never use the shared Actions cache here: PR workflows can read it. Only
+      # main writes the private registry cache.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ref
+          build-args: ${{ steps.pin.outputs.args }}
+          load: true
+          tags: kakao-ref:local
+          cache-from: type=registry,ref=${{ env.REF_IMAGE }}:buildcache
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref={0}:buildcache,mode=max', env.REF_IMAGE) || '' }}
+      - name: Self-check against corpus
+        if: needs.detect.outputs.corpus == 'true'
+        run: ref/selfcheck.sh kakao-ref:local testdata/corpus
+      - name: Push kakao-ref:<sha>
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag kakao-ref:local "$REF_IMAGE:$GITHUB_SHA"
+          docker push "$REF_IMAGE:$GITHUB_SHA"
+
+  # Moves kakao-ref:main only after every check for this commit has passed.
+  release:
+    needs: [detect, go-test, corpus-lint, parity, ref]
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      needs.ref.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker buildx imagetools create -t "$REF_IMAGE:main" "$REF_IMAGE:$GITHUB_SHA"
+      # Keeps the newest versions (by push time), so :main (newest <sha>) and
+      # :buildcache (rewritten on every main build) always survive.
+      - name: Prune old images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: kakao-ref
+          package-type: container
+          min-versions-to-keep: 6
+      # A public package can never be made private again. Fail loudly if it
+      # ever becomes pullable without credentials.
+      - name: Image must not be public
+        run: |
+          docker logout ghcr.io
+          if docker pull "$REF_IMAGE:main" >/dev/null 2>&1; then
+            echo "::error::$REF_IMAGE is publicly pullable"
+            exit 1
+          fi
