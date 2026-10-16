@@ -1,0 +1,95 @@
+{
+  "format": "mooo2.contract/v0",
+  "scenario": "synthetic/send-text",
+  "steps": [
+    {
+      "input": {
+        "commands": [
+          {
+            "id": "c1",
+            "action": "send",
+            "args": {
+              "chat": "CHAT_1",
+              "body": "hello"
+            }
+          }
+        ],
+        "inbound": [
+          {
+            "packetId": 7,
+            "status": 0,
+            "method": "MSG",
+            "bodyType": 0,
+            "body": {
+              "chatId": "CHAT_1",
+              "seen": {
+                "$numberInt": "1"
+              }
+            }
+          }
+        ],
+        "entropy": [
+          {
+            "source": "csprng",
+            "data": "AAECAwQFBgcICQoLDA0ODw=="
+          }
+        ],
+        "clock": [
+          {
+            "source": "wall",
+            "value": 1700000000000000000
+          },
+          {
+            "source": "mono",
+            "value": 42
+          }
+        ],
+        "snapshot": {
+          "name": "baseline-empty"
+        }
+      },
+      "output": {
+        "outbound": [
+          {
+            "packetId": 1,
+            "status": 0,
+            "method": "WRITE",
+            "bodyType": 0,
+            "body": {
+              "chatId": "CHAT_1",
+              "msg": "hello"
+            },
+            "cause": "cmd:c1"
+          }
+        ],
+        "events": [
+          {
+            "kind": "message",
+            "cause": "in:0",
+            "data": {
+              "chat": "CHAT_1"
+            }
+          }
+        ],
+        "records": [
+          {
+            "store": "chat_logs",
+            "op": "insert",
+            "key": "LOG_1",
+            "data": {
+              "message": "hello"
+            },
+            "cause": "cmd:c1"
+          }
+        ],
+        "decisions": [
+          {
+            "request": "WRITE",
+            "trigger": "command",
+            "cause": "cmd:c1"
+          }
+        ]
+      }
+    }
+  ]
+}
