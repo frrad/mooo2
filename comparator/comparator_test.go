@@ -134,6 +134,72 @@ func TestCausalOrdering(t *testing.T) {
 	)
 }
 
+func withIDs(out *contract.Output, ids ...uint32) *contract.Output {
+	for i, id := range ids {
+		out.Outbound[i].PacketID = id
+	}
+	return out
+}
+
+func TestPacketIDRenaming(t *testing.T) {
+	// The in:0 chain ran first in the candidate, so its request took the
+	// first id. The numbering is consistent, so nothing differs.
+	want := withIDs(base(), 1, 2, 3)
+	got := base()
+	got.Outbound = []contract.Packet{got.Outbound[2], got.Outbound[0], got.Outbound[1]}
+	withIDs(got, 1, 2, 3)
+	expect(t, compare(t, &Policy{}, want, got))
+
+	// Two reference requests share one candidate id.
+	got = withIDs(base(), 5, 5, 6)
+	r := compare(t, &Policy{}, want, got)
+	expect(t, r, "bug outbound[cmd:a][1].packetId")
+	if d := r.Diffs[0]; d.Want != "2" || d.Got != "5" {
+		t.Errorf("packetId diff: want %q got %q", d.Want, d.Got)
+	}
+
+	// One reference id (a reused id) maps to two candidate ids.
+	want = withIDs(base(), 1, 1, 2)
+	got = withIDs(base(), 7, 8, 9)
+	expect(t, compare(t, &Policy{}, want, got), "bug outbound[cmd:a][1].packetId")
+
+	// A rule can still cover packetId.
+	p := &Policy{Rules: []Rule{{ID: "ids", Kind: KindFree, Stream: Outbound, Field: "packetId", Rationale: "synthetic"}}}
+	expect(t, compare(t, p, want, got), "free outbound[cmd:a][1].packetId")
+
+	// A missing packet still shows its id.
+	got = withIDs(base(), 1, 1, 2)
+	got.Outbound = got.Outbound[:2]
+	r = compare(t, &Policy{}, want, got)
+	expect(t, r, "bug outbound[in:0][0]")
+	if !strings.Contains(r.Diffs[0].Want, `"packetId":2`) {
+		t.Errorf("missing item text: %s", r.Diffs[0].Want)
+	}
+}
+
+func TestRuleMatchesCandidateSide(t *testing.T) {
+	got := base()
+	got.Outbound[2].Method = "GETMEMBER"
+	p := &Policy{Rules: []Rule{{ID: "rename", Kind: KindDeviation, Stream: Outbound, Match: "GETMEMBER", Field: "method", Rationale: "synthetic"}}}
+	r := compare(t, p, base(), got)
+	expect(t, r, "deviation outbound[in:0][0].method")
+	if d := r.Diffs[0]; d.Match != "GETMEM" || d.GotMatch != "GETMEMBER" {
+		t.Errorf("Match %q GotMatch %q", d.Match, d.GotMatch)
+	}
+}
+
+func TestWrapperSubfieldOrder(t *testing.T) {
+	want := base()
+	want.Outbound[2].Body = json.RawMessage(`{"b":{"$binary":{"base64":"3q0=","subType":"00"}}}`)
+	got := base()
+	got.Outbound[2].Body = json.RawMessage(`{"b":{"$binary":{"subType":"00","base64":"3q0="}}}`)
+	expect(t, compare(t, &Policy{}, want, got))
+
+	// A different value is still one diff on the whole wrapper.
+	got.Outbound[2].Body = json.RawMessage(`{"b":{"$binary":{"subType":"80","base64":"3q0="}}}`)
+	expect(t, compare(t, &Policy{}, want, got), "bug outbound[in:0][0].body.b")
+}
+
 func TestMissingAndExtraItems(t *testing.T) {
 	got := base()
 	got.Records = nil

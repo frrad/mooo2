@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -23,7 +24,9 @@ type node struct {
 
 // parseTree parses one JSON value. An object whose keys all start with "$"
 // is an Extended JSON type wrapper such as {"$numberLong":"5"}, and becomes
-// a leaf, so a type change is reported as one value change.
+// a leaf, so a type change is reported as one value change. The leaf text
+// is canonical (see wrapperText), so wrappers that differ only in the order
+// of their subfields compare equal.
 func parseTree(raw []byte) (*node, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -63,7 +66,7 @@ func parseValue(dec *json.Decoder) (*node, error) {
 				return nil, err
 			}
 			if isWrapper(n) {
-				return &node{kind: 'v', leaf: n.text()}, nil
+				return &node{kind: 'v', leaf: n.wrapperText()}, nil
 			}
 			return n, nil
 		case '[':
@@ -100,6 +103,61 @@ func isWrapper(n *node) bool {
 		}
 	}
 	return true
+}
+
+// wrapperText is the compact JSON form of a type wrapper with its own keys
+// and the keys of its subfield objects sorted. Wrapper subfields, such as
+// $binary's base64 and subType, are named parts of one BSON value, not BSON
+// document elements, so their order does not change the encoded bytes.
+// Values below the subfields keep their order: $scope holds a document.
+func (n *node) wrapperText() string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, j := range sortedKeys(n) {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Quote(n.keys[j]))
+		b.WriteByte(':')
+		v := n.vals[j]
+		if v.kind == 'o' && n.keys[j] != "$scope" {
+			b.WriteByte('{')
+			for i, k := range sortedKeys(v) {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString(strconv.Quote(v.keys[k]))
+				b.WriteByte(':')
+				b.WriteString(v.vals[k].text())
+			}
+			b.WriteByte('}')
+		} else {
+			b.WriteString(v.text())
+		}
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// sortedKeys gives the indexes of n's keys in key order.
+func sortedKeys(n *node) []int {
+	idx := make([]int, len(n.keys))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return n.keys[idx[a]] < n.keys[idx[b]] })
+	return idx
+}
+
+// remove deletes key from object n, if present.
+func (n *node) remove(key string) {
+	for i, k := range n.keys {
+		if k == key {
+			n.keys = append(n.keys[:i:i], n.keys[i+1:]...)
+			n.vals = append(n.vals[:i:i], n.vals[i+1:]...)
+			return
+		}
+	}
 }
 
 // text is n's compact JSON form.
