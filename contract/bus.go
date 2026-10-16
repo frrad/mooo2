@@ -130,8 +130,10 @@ func (fw *FrameWriter) Write(f Frame) error {
 var ErrTruncated = errors.New("capture log ends in a partial frame")
 
 // ReadFrames reads a capture log written by FrameWriter. If the final line
-// has no newline and does not parse, it returns every complete frame along
-// with ErrTruncated. Any other malformed line is an error.
+// has no newline and is not well-formed JSON, it returns every complete
+// frame along with ErrTruncated. Any other malformed or invalid line,
+// including an unterminated last line that is whole JSON but not a valid
+// frame, is an error.
 func ReadFrames(r io.Reader) ([]Frame, error) {
 	br := bufio.NewReader(r)
 	var frames []Frame
@@ -144,7 +146,10 @@ func ReadFrames(r io.Reader) ([]Frame, error) {
 		if len(bytes.TrimSpace(line)) > 0 {
 			f, perr := parseFrame(line)
 			if perr != nil {
-				if !complete {
+				// An unterminated last line that is not even well-formed
+				// JSON was cut off mid-write. One that is whole but invalid
+				// is reported like any other bad line.
+				if !complete && !json.Valid(line) {
 					return frames, ErrTruncated
 				}
 				return frames, fmt.Errorf("line %d: %w", lineNo, perr)

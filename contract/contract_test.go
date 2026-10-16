@@ -63,6 +63,8 @@ func TestReadBundleRejects(t *testing.T) {
 		"unknown cmd":    strings.Replace(s, `"cause": "cmd:c1"`, `"cause": "cmd:c2"`, 1),
 		"long method":    strings.Replace(s, `"method": "WRITE"`, `"method": "WRITEWRITEWR"`, 1),
 		"body not obj":   strings.Replace(s, `"body": {`, `"body": [{`, 1),
+		"body plain num": strings.Replace(s, `"body": {`, `"body": {"n": 1, `, 1),
+		"body bad type":  strings.Replace(s, `"body": {`, `"body": {"n": {"$numberInt": "x"}, `, 1),
 		"bad clock":      strings.Replace(s, `"source": "mono"`, `"source": "tick"`, 1),
 	}
 	for name, in := range cases {
@@ -173,6 +175,11 @@ func TestReadFramesTruncated(t *testing.T) {
 	mid = append(mid, whole...)
 	if _, err := ReadFrames(bytes.NewReader(mid)); err == nil || errors.Is(err, ErrTruncated) {
 		t.Fatalf("mid-log corruption: err = %v", err)
+	}
+	// A whole but invalid last line is a validation error, not truncation.
+	bad := append(append([]byte{}, whole...), []byte(`{"seq":9,"tap":"net","dir":"in","altitude":"packet","payload":{}}`)...)
+	if _, err := ReadFrames(bytes.NewReader(bad)); err == nil || errors.Is(err, ErrTruncated) {
+		t.Fatalf("invalid unterminated last frame: err = %v", err)
 	}
 	// The last frame may lack its newline and still count.
 	got, err = ReadFrames(bytes.NewReader(bytes.TrimSuffix(whole, []byte("\n"))))

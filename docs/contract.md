@@ -49,11 +49,14 @@ The corpus must be text (corpus-lint rejects binary files, DESIGN.md §10.1).
 - **Scenario bundle:** one indented JSON document with
   `"format": "mooo2.contract/v0"`, a scenario name, and a list of steps.
   Encoding is deterministic, and reading is strict: unknown fields, trailing
-  data and causes that do not resolve are errors.
+  data, causes that do not resolve, and packet bodies that are not canonical
+  Extended JSON encodable as BSON (checked with [`../loco/bson/`](../loco/bson/))
+  are errors.
 - **Capture log:** JSON Lines, one capture-bus frame per line
   (`seq`, `tap`, `dir`, `altitude`, `payload`). A partial last line from a
-  crashed run is reported as truncation, and every complete frame before it
-  is kept.
+  crashed run (one that is not well-formed JSON) is reported as truncation,
+  and every complete frame before it is kept. A last line that is whole JSON
+  but not a valid frame is a validation error, newline or not.
 
 ## 2. Equality policy
 

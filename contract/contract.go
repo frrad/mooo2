@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/frrad/mooo2/loco/bson"
 )
 
 // Input is everything a client consumes for one scenario step (DESIGN.md
@@ -334,6 +336,15 @@ func (p *Packet) validate() error {
 		}
 	}
 	if err := checkObject(p.Body, false); err != nil {
+		return fmt.Errorf("body: %w", err)
+	}
+	// The body must be canonical Extended JSON that encodes to BSON, so
+	// every valid packet can be framed for the wire.
+	d, err := bson.FromExtJSON(p.Body)
+	if err != nil {
+		return fmt.Errorf("body: %w", err)
+	}
+	if _, err := bson.Marshal(d); err != nil {
 		return fmt.Errorf("body: %w", err)
 	}
 	return nil
