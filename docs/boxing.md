@@ -55,7 +55,70 @@ grey-box taps** — tap offsets move every release (DESIGN §12).
   mirrors at build time — acceptable for a bench oracle, and documented here.
 - Scripts live under [`../docker/`](../docker/): `box-install.sh` (build-time
   silent install), `entrypoint.sh` (headless X + tap seam), `verify-launch.sh`
-  (the spike's pass/fail check).
+  (the spike's pass/fail check), and the containment tools described below.
+
+## Network interpose (Tier 1 containment)
+
+The boxed client's only off-box channel is the network, so egress is
+**default-deny** and every attempt is logged (DESIGN §4, §8;
+[`containment.md`](containment.md) "Network"). `net-interpose.sh` sets it up
+inside the container's network namespace, without touching the client:
+
+- **nftables rules on the wine user's uid** (the client, `wineserver` and every
+  Wine helper run as it). IPv4 DNS to any server goes to a DNS stub, every other
+  IPv4 TCP connection off loopback goes to a transparent proxy, loopback is
+  allowed, and everything else (UDP, ICMP, IPv6) is dropped and counted. The
+  redirect runs at nat priority -101, ahead of Docker's own DNS DNAT on
+  user-defined networks, and the filter accepts only flows carrying the
+  conntrack mark set by our own redirect, not any DNAT. Direct traffic to
+  Docker's embedded resolver (`127.0.0.11`, on its real port) is dropped and
+  counted.
+- **`net-interpose.py`**, running as root so its own traffic is not redirected.
+  The DNS stub resolves allowlisted names for real and answers every other name
+  with a unique sinkhole address from `198.18.0.0/15` (never routed). The client
+  then still tries to connect, so the proxy logs the port and the TLS server name
+  it wanted before resetting the connection. Allowlisted connections are spliced
+  to the real server.
+- **Ingress fan-out (Shadow mode).** With `--fanout HOST:PORT`, every chunk of an
+  allowed flow is also sent to each connected subscriber as a JSON line
+  (`{"conn","dir":"in"|"out","b64"}`). Inbound is received once and delivered to
+  the reference and the subscribers identically. Subscribers can only read, so a
+  candidate attached here runs dry-run by construction.
+- **Decision log** — `events.jsonl` in `$NET_RUN_DIR` (default
+  `/tmp/net-interpose`): one JSON line per DNS or TCP verdict, names and addresses
+  only, never payload. It is still a lab artifact; do not commit it.
+
+```sh
+make net-spike    # = docker run --rm --cap-add NET_ADMIN -u 0 <image> verify-net.sh
+```
+
+`verify-net.sh` is account-free. It launches the **unmodified** client behind the
+interpose, then runs probes as the wine user: a DNS lookup, a TLS connection and a
+UDP send, each of which must be denied and logged (or counted), plus a connection
+to an allowlisted test server inside the container, whose reply must reach both
+the probe and a fan-out subscriber. On a user-defined network (`docker run
+--network <net>`) it also queries Docker's resolver directly, and that query must
+be dropped. It passes if all of that holds and the client
+is still running after the hold window. It also lists what the client itself
+tried to reach. Pre-login, that is a single HTTPS lookup of a Kakao CDN name.
+
+**The allowlist hook.** `/etc/kakao/net-allowlist` ships empty (see
+[`../docker/net-allowlist`](../docker/net-allowlist) for the format: exact names,
+`*.suffix`, IPv4/CIDR, each with an optional `:PORT`). For the login spike, which
+is a manual step on a disposable account (DESIGN §11), mount a filled-in copy:
+
+```sh
+docker run --rm --cap-add NET_ADMIN -u 0 \
+  -v "$PWD/my-allowlist:/etc/kakao/net-allowlist:ro" <image> verify-net.sh
+```
+
+Start from the names `verify-net.sh` reports as client-denied, and widen it one
+denied entry at a time. Do not commit a filled-in list with anything
+account-specific in it.
+
+To gate another script the same way, wrap it in `net-interpose.sh up
+[--allowlist FILE] [--fanout HOST:PORT]` … `net-interpose.sh down`; stop the
+client before `down`, since egress is ungated afterwards.
 
 ## Prefix snapshot / restore (Tier 1 containment)
 

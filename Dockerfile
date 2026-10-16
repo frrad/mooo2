@@ -52,18 +52,30 @@ ENV WINEPREFIX=/home/wine/.wine \
     WINEDEBUG=-all \
     DISPLAY=:0
 
+# --- Tier 1 containment tooling (docs/containment.md) ----------------------------
+# Its own layer so the Wine layer above stays cached. nftables: egress interpose.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nftables \
+ && rm -rf /var/lib/apt/lists/*
+
 # --- Boxing scripts + grey-box tap seam ----------------------------------------
 COPY docker/box-install.sh docker/box-proxy.sh docker/entrypoint.sh \
      docker/verify-launch.sh docker/verify-inject.sh \
      docker/prefix-snapshot.sh docker/prefix-restore.sh docker/prefix-diff.sh \
      docker/prefix-state.sh docker/prefix-trace.sh \
      docker/prefix-guard.sh docker/prefix-guard.py \
+     docker/net-interpose.sh docker/net-interpose.py docker/verify-net.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/local/bin/entrypoint.sh \
              /usr/local/bin/verify-launch.sh /usr/local/bin/verify-inject.sh \
              /usr/local/bin/prefix-snapshot.sh /usr/local/bin/prefix-restore.sh /usr/local/bin/prefix-diff.sh \
              /usr/local/bin/prefix-state.sh /usr/local/bin/prefix-trace.sh \
-             /usr/local/bin/prefix-guard.sh /usr/local/bin/prefix-guard.py
+             /usr/local/bin/prefix-guard.sh /usr/local/bin/prefix-guard.py \
+             /usr/local/bin/net-interpose.sh /usr/local/bin/net-interpose.py \
+             /usr/local/bin/verify-net.sh
+# Egress allowlist for the interpose: empty (deny all) by default. Mount over it
+# for the login spike (docs/boxing.md).
+COPY docker/net-allowlist /etc/kakao/net-allowlist
 COPY patches/ /opt/patches/
 RUN chmod +x /opt/patches/dllproxy/gen-forwarders.sh
 

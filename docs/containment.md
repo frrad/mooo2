@@ -59,6 +59,15 @@ in any internal address.
   - **Fan inbound** to both sides (DESIGN §4). Inbound is received once at the
     interpose and delivered to reference and candidate identically.
   - A transparent proxy / `netns` interpose is the natural home for both.
+    **Implemented** by [`../docker/net-interpose.sh`](../docker/net-interpose.sh):
+    nftables rules matched on the wine user's uid send its DNS to a stub and its
+    TCP to a transparent proxy (`net-interpose.py`), and drop and count
+    everything else (UDP, ICMP, IPv6). The allowlist is empty by default, so
+    nothing leaves the box; denied names get a never-routed sinkhole address so
+    the client's follow-up connection, port and TLS server name are logged too.
+    Allowed flows are spliced to the server and every chunk is published to
+    read-only fan-out subscribers. Needs `CAP_NET_ADMIN`. See
+    [`boxing.md`](boxing.md) for usage.
   - Limitation: at this layer the LOCO payload is **ciphertext**. You can prove
     *what bytes* crossed, not *what they mean* — until RNG is seized (below). With
     the entropy stream seized, the client's ephemeral keys/IVs derive from material
@@ -311,7 +320,11 @@ this as plan B; do not build it unless the spike forces it.
      `prefix-diff.sh` for re-baselining, and `prefix-state.sh` for the fast
      per-run loop over just the ~3 MB mutable state set (see [`boxing.md`](boxing.md)).
   2. Network interpose with default-deny egress + ingress fan-out (also the
-     Shadow-mode gate, DESIGN §8).
+     Shadow-mode gate, DESIGN §8). **Done** — `net-interpose.sh` /
+     `net-interpose.py`, checked by `verify-net.sh` (`make net-spike`): the
+     unmodified client stays up behind it and blocked egress is logged. The
+     allowlist hook (`/etc/kakao/net-allowlist`) stays empty until the login
+     spike.
   3. Clock seize (`libfaketime`) and RNG seize (`ntdll` shim) — the latter also
      makes captured traffic decryptable via a candidate key schedule.
   4. Layered prefix: immutable read-only base + writable state layer on a volume,
