@@ -36,14 +36,30 @@ is what ships.
 
 ## Status
 
-Early implementation; the Go client does not exist yet. Merged so far:
+Early implementation. There is no Go client yet, but the pieces the oracle
+compares it against are in place:
 
-- the Wine/Docker box and an unmodified-launch spike for the reference client;
+- the Wine/Docker box and an unmodified-launch spike for the reference client,
+  with a proxy-DLL fallback for the injection seam;
 - Spike A: an injected DLL (via a proxied bundled import) loads into the boxed
   client — passing;
 - prefix snapshot/restore for a repeatable starting state;
-- Tier-1 containment: a `WINEDEBUG` trace of the client's state set, enforced by a
-  read-only base prefix plus a fanotify guard.
+- **Contract v0** ([`contract/`](contract/), [`docs/contract.md`](docs/contract.md)):
+  the `Input`/`Output` types, the scenario-bundle and capture-log text formats,
+  and projection from capture-bus frames;
+- **Comparator v0** ([`comparator/`](comparator/)): field-level diffs under the
+  equality policy of [`docs/contract.md`](docs/contract.md) §2 — strict by
+  default, review-gated decisions, documented free/deviation rules, causal
+  ordering;
+- **LOCO framing stub** ([`loco/`](loco/)): the packet header and a minimal
+  BSON codec with canonical Extended JSON, from public sources only;
+- **Tier 1 containment, complete** ([`docs/containment.md`](docs/containment.md)):
+  default-deny network interpose with ingress fan-out, clock and RNG seize
+  (libfaketime plus an entropy shim below Wine's `ntdll`), and a layered
+  prefix (read-only base, state layer on tmpfs or a volume, payload dir), on
+  top of the `WINEDEBUG` state-set trace and fanotify guard.
+
+Next is the Wine login spike, which is manual and needs a disposable account.
 
 This repository contains no credentials,
 raw captures, device identifiers, proprietary binaries, or decompiled source.
