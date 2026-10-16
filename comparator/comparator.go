@@ -14,6 +14,8 @@
 //   - Ordering is causal, not interleaved. Items are grouped by their Cause.
 //     Within one group and one stream, order must match. Across groups and
 //     across streams, order is not compared.
+//   - Outbound packet ids are compared up to a consistent renaming, because
+//     reordered causal chains number their requests in a different order.
 package comparator
 
 import (
@@ -21,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/frrad/mooo2/contract"
@@ -79,7 +82,8 @@ const (
 )
 
 // Rule covers a set of differences. All of Stream, Match and Field must
-// match for the rule to apply.
+// match for the rule to apply. When the two items' discriminators differ,
+// Match may name either side's.
 type Rule struct {
 	// ID names the rule in reports. Unique within a policy.
 	ID   string   `json:"id"`
@@ -147,8 +151,12 @@ type Diff struct {
 	Cause contract.Ref
 	// Index is the item's position within its causal group and stream.
 	Index int
-	// Match is the item's discriminator (method, kind, store, request).
+	// Match is the item's discriminator (method, kind, store, request):
+	// the reference item's, or the candidate's for an extra item.
 	Match string
+	// GotMatch is the candidate item's discriminator when both items are
+	// present, so a rule keyed on the candidate's side also applies.
+	GotMatch string
 	// Field is the dotted path of the differing field, or "" when the
 	// whole item is missing on one side.
 	Field string
@@ -227,7 +235,12 @@ func (r *Report) Summary() string {
 type item struct {
 	cause contract.Ref
 	match string
-	tree  *node
+	// tree is the compared form. For outbound packets it omits packetId,
+	// which is compared through a renaming instead (see ids).
+	tree *node
+	// full is the whole item as compact JSON, for missing or extra items.
+	full string
+	id   uint32
 }
 
 // Compare diffs the candidate output got against the reference output want.
@@ -252,19 +265,26 @@ func (p *Policy) Compare(want, got *contract.Output) (*Report, error) {
 func (p *Policy) compareStream(r *Report, s Stream, want, got []item) {
 	wg, order := group(want, nil)
 	gg, order := group(got, order)
+	ids := newRenaming()
 	for _, cause := range order {
 		w, g := wg[cause], gg[cause]
 		for i := 0; i < len(w) || i < len(g); i++ {
 			d := Diff{Stream: s, Cause: cause, Index: i}
 			switch {
 			case i >= len(g):
-				d.Match, d.Want = w[i].match, w[i].tree.text()
+				d.Match, d.Want = w[i].match, w[i].full
 				r.add(p.classify(d))
 			case i >= len(w):
-				d.Match, d.Got = g[i].match, g[i].tree.text()
+				d.Match, d.Got = g[i].match, g[i].full
 				r.add(p.classify(d))
 			default:
-				d.Match = w[i].match
+				d.Match, d.GotMatch = w[i].match, g[i].match
+				if s == Outbound && !ids.pair(w[i].id, g[i].id) {
+					d.Field = "packetId"
+					d.Want = strconv.FormatUint(uint64(w[i].id), 10)
+					d.Got = strconv.FormatUint(uint64(g[i].id), 10)
+					r.add(p.classify(d))
+				}
 				diffTree("", w[i].tree, g[i].tree, func(field, want, got string) {
 					d.Field, d.Want, d.Got = field, want, got
 					r.add(p.classify(d))
@@ -275,6 +295,29 @@ func (p *Policy) compareStream(r *Report, s Stream, want, got []item) {
 }
 
 func (r *Report) add(d Diff) { r.Diffs = append(r.Diffs, d) }
+
+// renaming is a partial bijection from reference packet ids to candidate
+// packet ids. Packet ids are client-assigned sequence numbers, so when causal
+// chains run in a different order (DESIGN.md §9) the same requests get
+// different ids. Only the consistency of the numbering is compared: each
+// reference id must always pair with the same candidate id, and vice versa.
+type renaming struct{ fwd, rev map[uint32]uint32 }
+
+func newRenaming() *renaming {
+	return &renaming{fwd: map[uint32]uint32{}, rev: map[uint32]uint32{}}
+}
+
+// pair records want ↦ got and reports whether it agrees with every pair
+// recorded so far. A conflicting pair is not recorded.
+func (m *renaming) pair(want, got uint32) bool {
+	g, okf := m.fwd[want]
+	w, okr := m.rev[got]
+	if okf || okr {
+		return okf && okr && g == got && w == want
+	}
+	m.fwd[want], m.rev[got] = got, want
+	return true
+}
 
 // group splits items by cause, keeping order within each group. order lists
 // causes by first appearance, extended with any new causes.
@@ -316,7 +359,7 @@ func (p *Policy) classify(d Diff) Diff {
 }
 
 func (r *Rule) covers(d Diff) bool {
-	if r.Stream != d.Stream || (r.Match != "" && r.Match != d.Match) {
+	if r.Stream != d.Stream || (r.Match != "" && r.Match != d.Match && r.Match != d.GotMatch) {
 		return false
 	}
 	if r.Field == "" {
@@ -372,14 +415,13 @@ func items(out *contract.Output, s Stream) ([]item, error) {
 		if t.kind != 'o' {
 			return errors.New("item is not an object")
 		}
-		for i, k := range t.keys {
-			if k == "cause" {
-				t.keys = append(t.keys[:i:i], t.keys[i+1:]...)
-				t.vals = append(t.vals[:i:i], t.vals[i+1:]...)
-				break
-			}
+		t.remove("cause")
+		it := item{cause: cause, match: match, tree: t, full: t.text()}
+		if p, ok := v.(contract.Packet); ok {
+			it.id = p.PacketID
+			t.remove("packetId")
 		}
-		res = append(res, item{cause: cause, match: match, tree: t})
+		res = append(res, it)
 		return nil
 	}
 	var err error

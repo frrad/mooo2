@@ -66,9 +66,12 @@ Outbound packets, events and records are **machine-exact**. Every field must
 match, including:
 
 - BSON value types: `{"$numberInt":"1"}` and `{"$numberLong":"1"}` differ.
-- Object key order, because it changes the BSON bytes.
+- Object key order, because it changes the BSON bytes. The subfields of an
+  Extended JSON type wrapper, such as `$binary`'s `base64` and `subType`, are
+  the exception: they are parts of one BSON value, so their order is ignored.
 - Values derived from seized entropy or clock. Both sides consume the same
-  seized streams, so those values are pinned and must match.
+  seized streams, so those values are pinned and must match — as long as both
+  clients draw from the streams in the same order (see §2.4.1).
 
 An unexplained difference in a machine-exact field is a **bug**. By default
 the candidate is wrong (DESIGN.md §3).
@@ -91,6 +94,10 @@ and an optional field path. It also has a required rationale.
   diff is reported as `free` and does not fail.
 - **`deviation`**: the candidate deliberately differs and is still correct
   for interop. The diff is reported as `deviation` and does not fail.
+
+When the two compared items have different discriminators (say the reference
+sent `GETMEM` and the candidate `GETMEMBER` in the same position), a rule
+keyed on either one applies.
 
 Field paths are dotted (`body.msg`). `*` matches any one segment, and array
 indexes are ignored. A rule covers its field and everything below it. A rule
@@ -118,6 +125,31 @@ Thread scheduling is the one input that cannot be pinned (DESIGN.md §5.1,
 
 Capture-bus `seq` numbers record the reference's actual order, but they are
 not part of the compared data.
+
+#### 2.4.1 Values that depend on interleaving
+
+Reordering causal chains is allowed, but some values encode the order in
+which a client did things, not just what it did.
+
+- **Packet ids.** The client numbers its requests in the order it sends
+  them, so if chain `a` runs before chain `in:0` in the reference and after it
+  in the candidate, the same requests get different ids. The comparator
+  therefore compares outbound `packetId`s **up to a consistent renaming**:
+  as it pairs items it builds a one-to-one map from reference ids to
+  candidate ids, and only a pair that breaks the map is a `bug` at
+  `packetId` (two reference ids sharing one candidate id, or one reference
+  id given two candidate ids). A rule on field `packetId` can still cover
+  it. Ids inside packet bodies, events or records are not renamed; none is
+  known yet.
+- **Values drawn from the shared entropy and clock streams.** Each seized
+  stream is consumed in draw order. When two chains interleave differently,
+  they take different draws from the same stream, so a nonce or timestamp
+  can differ in both chains even though each client is correct. The
+  comparator does not correct for this: such diffs show up as `bug`s, and
+  are only trustworthy when the reference and candidate drew in the same
+  order. Scenarios that check entropy- or clock-derived fields should keep
+  to one causal chain at a time until there is a fix, such as per-chain
+  streams or matching draws by consumer instead of position.
 
 Provisional: causes point only at inputs. Finer causal edges, such as "this
 outbound request was caused by that decision", are left for when the
