@@ -3,6 +3,7 @@ package bson
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"math"
 	"reflect"
 	"strings"
@@ -199,5 +200,81 @@ func TestFromExtJSONRejects(t *testing.T) {
 	}
 	if _, err := ToExtJSON(D{{"$x", "y"}}); err == nil {
 		t.Error("ToExtJSON accepted a $ key")
+	}
+}
+
+// nest wraps a value in n levels of {"a": ...}.
+func nest(n int) D {
+	d := D{{"a", "x"}}
+	for i := 1; i < n; i++ {
+		d = D{{"a", d}}
+	}
+	return d
+}
+
+func TestMaxDepth(t *testing.T) {
+	ok, err := Marshal(nest(MaxDepth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unmarshal(ok); err != nil {
+		t.Errorf("depth %d rejected: %v", MaxDepth, err)
+	}
+	deep, err := Marshal(nest(MaxDepth + 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unmarshal(deep); !errors.Is(err, errTooDeep) {
+		t.Errorf("depth %d: err = %v, want errTooDeep", MaxDepth+1, err)
+	}
+	// Arrays count toward depth too.
+	arr := D{{"a", A{A{"x"}}}}
+	for i := 3; i <= MaxDepth+1; i++ {
+		arr = D{{"a", arr}}
+	}
+	b, _ := Marshal(arr)
+	if _, err := Unmarshal(b); !errors.Is(err, errTooDeep) {
+		t.Errorf("deep array: err = %v, want errTooDeep", err)
+	}
+
+	ext, err := ToExtJSON(nest(MaxDepth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FromExtJSON(ext); err != nil {
+		t.Errorf("ExtJSON depth %d rejected: %v", MaxDepth, err)
+	}
+	ext, _ = ToExtJSON(nest(MaxDepth + 1))
+	if _, err := FromExtJSON(ext); !errors.Is(err, errTooDeep) {
+		t.Errorf("ExtJSON depth %d: err = %v, want errTooDeep", MaxDepth+1, err)
+	}
+}
+
+// craftDeep builds a raw body nested levels deep, as {"a": {"a": ... {}}}.
+// Level i starts at 7i: int32 length, 0x03, "a\x00", the next level, 0x00.
+func craftDeep(levels int) []byte {
+	b := make([]byte, 0, levels*8+5)
+	for i := 0; i < levels; i++ {
+		// Level i ends after the innermost empty document (5 bytes at
+		// 7*levels) plus one terminator for each level from i inward.
+		n := uint32(levels*7 + 5 + levels - i - i*7)
+		b = append(b, byte(n), byte(n>>8), byte(n>>16), byte(n>>24), 0x03, 'a', 0)
+	}
+	b = append(b, 5, 0, 0, 0, 0)
+	for i := 0; i < levels; i++ {
+		b = append(b, 0)
+	}
+	return b
+}
+
+// A crafted body far deeper than the limit must fail cleanly rather than
+// recurse. A shallow one built the same way must decode, which shows the
+// lengths are consistent and only the depth limit stops the deep one.
+func TestCraftedDeepBody(t *testing.T) {
+	if _, err := Unmarshal(craftDeep(MaxDepth - 1)); err != nil {
+		t.Fatalf("shallow crafted body: %v", err)
+	}
+	if _, err := Unmarshal(craftDeep(1 << 20)); !errors.Is(err, errTooDeep) {
+		t.Fatalf("err = %v, want errTooDeep", err)
 	}
 }

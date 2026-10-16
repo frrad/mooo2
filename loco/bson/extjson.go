@@ -135,7 +135,7 @@ func parseDouble(s string) (float64, error) {
 // numbers are rejected: canonical form always names the BSON number type,
 // and guessing it would break byte-exact re-encoding.
 func FromExtJSON(b []byte) (D, error) {
-	v, err := readJSONValue(json.RawMessage(b))
+	v, err := readJSONValue(json.RawMessage(b), 1)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,9 @@ func members(raw json.RawMessage) (ms []member, ok bool, err error) {
 	return ms, true, nil
 }
 
-func readJSONValue(raw json.RawMessage) (any, error) {
+// readJSONValue decodes one value. depth is its nesting level; documents
+// and arrays deeper than MaxDepth are rejected, as in Unmarshal.
+func readJSONValue(raw json.RawMessage, depth int) (any, error) {
 	ms, isObj, err := members(raw)
 	if err != nil {
 		return nil, err
@@ -191,12 +193,15 @@ func readJSONValue(raw json.RawMessage) (any, error) {
 		if len(ms) > 0 && strings.HasPrefix(ms[0].key, "$") {
 			return readWrapper(ms)
 		}
+		if depth > MaxDepth {
+			return nil, errTooDeep
+		}
 		d := D{}
 		for _, m := range ms {
 			if strings.HasPrefix(m.key, "$") {
 				return nil, fmt.Errorf("key %q: keys starting with $ are not supported", m.key)
 			}
-			v, err := readJSONValue(m.raw)
+			v, err := readJSONValue(m.raw, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", m.key, err)
 			}
@@ -213,13 +218,16 @@ func readJSONValue(raw json.RawMessage) (any, error) {
 	}
 	switch t := tok.(type) {
 	case json.Delim: // '['
+		if depth > MaxDepth {
+			return nil, errTooDeep
+		}
 		var elems []json.RawMessage
 		if err := json.Unmarshal(raw, &elems); err != nil {
 			return nil, err
 		}
 		a := A{}
 		for i, e := range elems {
-			v, err := readJSONValue(e)
+			v, err := readJSONValue(e, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("[%d]: %w", i, err)
 			}

@@ -68,6 +68,12 @@ const (
 // minDocLen is the size of the empty document: int32 length + 0x00.
 const minDocLen = 5
 
+// MaxDepth bounds document and array nesting when decoding, so a crafted
+// body cannot exhaust the stack. The top-level document is depth 1.
+const MaxDepth = 100
+
+var errTooDeep = fmt.Errorf("nesting deeper than %d", MaxDepth)
+
 // Marshal encodes d as a BSON document.
 func Marshal(d D) ([]byte, error) {
 	return appendDoc(nil, d, nil)
@@ -157,7 +163,7 @@ func appendElem(b []byte, key string, v any) ([]byte, error) {
 
 // Unmarshal decodes one BSON document that fills b exactly.
 func Unmarshal(b []byte) (D, error) {
-	d, _, n, err := readDoc(b, false)
+	d, _, n, err := readDoc(b, false, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +174,12 @@ func Unmarshal(b []byte) (D, error) {
 }
 
 // readDoc reads a document from the front of b and returns its length. If
-// array is set, keys must be "0", "1", ... and the result is an A.
-func readDoc(b []byte, array bool) (D, A, int, error) {
+// array is set, keys must be "0", "1", ... and the result is an A. depth
+// is the nesting level of this document.
+func readDoc(b []byte, array bool, depth int) (D, A, int, error) {
+	if depth > MaxDepth {
+		return nil, nil, 0, errTooDeep
+	}
 	if len(b) < minDocLen {
 		return nil, nil, 0, errors.New("short document")
 	}
@@ -189,7 +199,7 @@ func readDoc(b []byte, array bool) (D, A, int, error) {
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		v, used, err := readValue(t, rest)
+		v, used, err := readValue(t, rest, depth)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("%s: %w", key, err)
 		}
@@ -225,8 +235,9 @@ func need(b []byte, n int) error {
 }
 
 // readValue decodes one element value of type t from the front of b and
-// returns the bytes it used.
-func readValue(t byte, b []byte) (any, int, error) {
+// returns the bytes it used. depth is the nesting level of the enclosing
+// document.
+func readValue(t byte, b []byte, depth int) (any, int, error) {
 	switch t {
 	case tDouble:
 		if err := need(b, 8); err != nil {
@@ -250,10 +261,10 @@ func readValue(t byte, b []byte) (any, int, error) {
 		}
 		return string(s[:n-1]), 4 + n, nil
 	case tDocument:
-		d, _, n, err := readDoc(b, false)
+		d, _, n, err := readDoc(b, false, depth+1)
 		return d, n, err
 	case tArray:
-		_, a, n, err := readDoc(b, true)
+		_, a, n, err := readDoc(b, true, depth+1)
 		return a, n, err
 	case tBinary:
 		if err := need(b, 5); err != nil {
