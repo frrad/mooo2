@@ -10,7 +10,8 @@
 #      delivered both to the probe and, identically, to a fan-out subscriber;
 #   4. a name-allowed destination is SNI-checked: with an allowlisted name resolved
 #      (through the DNS stub) to a test server, a ClientHello naming that host is
-#      spliced, while one naming another host, or none, is denied and logged;
+#      spliced (also when it arrives in pieces), while one naming another host, or
+#      none, or one trickled in past the read window, is denied and logged;
 #   5. a stalled fan-out subscriber is bounded: while it reads nothing, a 16 MiB
 #      allowed download still reaches the probe in full, and the subscriber is
 #      dropped and logged once it falls --fanout-limit bytes behind.
@@ -147,7 +148,7 @@ disown $!   # cleanup SIGKILLs it; keep bash from reporting the job
 # --- Probes, as the boxed user (so they hit the same rules as the client) -------
 "${BOX[@]}" python3 - "$SELF_IP" "$TEST_PORT" "${RESOLVER_PORT:-0}" \
   "$SNI_NAME" "$SNI_PORT" "$BULK_PORT" >"$NET_RUN_DIR/probe.log" 2>&1 <<'EOF' || true
-import socket, ssl, struct, sys
+import socket, ssl, struct, sys, time
 self_ip, port, rport = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 sni_name, sni_port, bulk_port = sys.argv[4], int(sys.argv[5]), int(sys.argv[6])
 try:
@@ -201,10 +202,25 @@ try:
     print("sni-dns", query_a(sni_name))
 except OSError as e:
     print("sni-dns-error", e)
-for label, sni in (("match", sni_name), ("mismatch", "sni-other.example"), ("none", None)):
+# (label, SNI, split offsets, pause between pieces). The *-stall cases send a
+# prefix of a ClientHello for a disallowed name (1 byte, 4 bytes = partial
+# record header, 40 bytes = partial body), wait out the interpose's 2 s read
+# window, then send the rest: never forwarded. split-ok trickles an allowed
+# hello in quickly: it must still pass.
+OTHER = "sni-other.example"
+for label, sni, cuts, pause in (("match", sni_name, (), 0), ("mismatch", OTHER, (), 0),
+                                ("none", None, (), 0), ("prefix1-stall", OTHER, (1,), 2.5),
+                                ("prefix4-stall", OTHER, (4,), 2.5),
+                                ("body-stall", OTHER, (40,), 2.5),
+                                ("split-ok", sni_name, (1, 4, 40), 0.2)):
+    h = client_hello(sni)
+    pieces = [h[a:b] for a, b in zip((0,) + cuts, cuts + (len(h),))]
     try:
         with socket.create_connection((self_ip, sni_port), timeout=10) as c:
-            c.sendall(client_hello(sni))
+            for k, piece in enumerate(pieces):
+                if k:
+                    time.sleep(pause)
+                c.sendall(piece)
             print("sni-%s" % label, c.recv(64).decode("ascii", "replace").strip() or "closed")
     except OSError as e:
         print("sni-%s reset %s" % (label, type(e).__name__))
@@ -267,6 +283,12 @@ checks = {
     "sni-mismatch-denied": ("sni-mismatch " + SNI_REPLY) not in probe
                            and sni_deny("sni-other.example"),
     "sni-none-denied": ("sni-none " + SNI_REPLY) not in probe and sni_deny(None),
+    # Trickled prefixes of a disallowed hello: denied as incomplete (no SNI read).
+    "sni-trickle-denied": all(("sni-%s %s" % (l, SNI_REPLY)) not in probe
+                              for l in ("prefix1-stall", "prefix4-stall", "body-stall"))
+        and sum(1 for e in events if e.get("reason") == "sni" and e.get("name") == SNI_NAME
+                and e.get("sni") is None) >= 4,
+    "sni-split-allowed": ("sni-split-ok " + SNI_REPLY) in probe,
     "bulk-intact": ("bulk-received %d" % BULK) in probe,
     "stalled-sub-dropped": bool(STALLED) and any(
         e.get("kind") == "fanout" and e.get("verdict") == "drop"

@@ -82,8 +82,10 @@ inside the container's network namespace, without touching the client:
   name resolved to it may be a shared CDN address, so if the client opens with a
   TLS ClientHello, its SNI must be allowlisted (for that port) as well. A
   mismatch, or a ClientHello with no SNI, is denied and logged (`"reason":"sni"`)
-  before any byte reaches the server. Address-allowlisted destinations and
-  non-TLS flows are not SNI-checked.
+  before any byte reaches the server. So is any opening byte 0x16 (a TLS
+  handshake record) whose record is not complete and parseable within 2 s, so a
+  hello trickled in to slip past the check is refused. Address-allowlisted
+  destinations and flows that do not open with 0x16 are not SNI-checked.
 - **Ingress fan-out (Shadow mode).** With `--fanout HOST:PORT`, every chunk of an
   allowed flow is also sent to each connected subscriber as a JSON line
   (`{"conn","dir":"in"|"out","b64"}`). Inbound is received once and delivered to
@@ -241,14 +243,16 @@ honours `KAKAO_EXE`. The invariants are:
 - every state path resolves inside the state layer;
 - the state layer is not overlayfs;
 - `C:\injector` points at the payload dir;
-- the base is read-only: creating a file at its root or in a linked tree fails,
-  so `run` needs `docker run --read-only`.
+- the base is read-only: creating a file at its root or in a linked tree fails
+  with `EROFS` (a permission error does not count), so `run` needs
+  `docker run --read-only`.
 
 Mount tmpfs layers with `exec`, because Wine maps PE images from them.
 
 `verify-layered.sh` is account-free and passes if all of these hold:
 
-- the invariants hold, and `check` fails when pointed at a writable base;
+- the invariants hold, and `check` fails when pointed at a writable base, or at
+  one that is merely unwritable for the wine user (`EACCES`);
 - writing into the base fails, both directly and through the prefix;
 - the **unmodified** client stays up from the layered prefix;
 - its writes land in the state layer, where `prefix-state.sh snapshot` captures them.

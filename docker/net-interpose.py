@@ -20,8 +20,11 @@ process then:
     a shared CDN address that serves other names too. So on such a flow, if the
     client opens with a TLS ClientHello, its SNI must also be allowlisted (for
     that port), or the flow is denied before any byte reaches the server. A
-    ClientHello without SNI is denied too. Destinations allowlisted by address
-    are not SNI-checked, and neither are non-TLS flows.
+    ClientHello without SNI is denied too, and so is any first byte 0x16 (TLS
+    handshake) whose record is not complete and parseable within 2 s, so the
+    check cannot be dodged by trickling the hello in. Destinations allowlisted
+    by address are not SNI-checked, and neither are flows whose first byte is
+    not 0x16.
   * Ingress fan-out (Shadow mode, DESIGN §8). For allowed flows, every chunk is
     also published to fan-out subscribers (JSON lines on --fanout HOST:PORT):
     "in" is server->client, "out" is client->server. Inbound is received once
@@ -178,11 +181,15 @@ class Interpose:
 
     def sni_verdict(self, first, port):
         """For a flow allowed by DNS name: (ok, sni). If the client's first bytes
-        are a TLS ClientHello, its SNI must be an allowlisted name for this port;
-        a ClientHello without SNI fails. Anything else passes."""
+        could be a TLS handshake record (first byte 0x16), the record must be
+        complete, hold a ClientHello, and name an allowlisted host for this port;
+        anything short of that fails, so a hello split or trickled past the read
+        window is never let through unchecked. Other first bytes pass."""
         if not is_tls_handshake(first):
             return True, None
-        sni = tls_sni(first)
+        if not tls_record_complete(first):
+            return False, None
+        sni = tls_sni(first[:tls_record_len(first)])
         if sni is None:
             return False, None
         ports = self.allow.name_ports(sni)
@@ -284,15 +291,29 @@ def original_dst(sock):
 
 
 def is_tls_handshake(buf):
-    """True if buf starts like a TLS handshake record (type 22, version 3.x)."""
-    return len(buf) >= 2 and buf[0] == 0x16 and buf[1] == 0x03
+    """True if buf may start a TLS handshake record: its first byte is the
+    handshake content type (22). Decided on the first byte alone, so a client
+    cannot dodge the SNI gate by sending a shorter prefix first."""
+    return buf[:1] == b"\x16"
+
+
+def tls_record_len(buf):
+    """Length of the first TLS record (header included); 0 if the 5-byte header
+    is not all in yet."""
+    return 5 + struct.unpack("!H", buf[3:5])[0] if len(buf) >= 5 else 0
+
+
+def tls_record_complete(buf):
+    n = tls_record_len(buf)
+    return n > 0 and len(buf) >= n
 
 
 async def read_first(reader, timeout=None):
-    """The client's first bytes. If they start a TLS handshake record, keep
+    """The client's first bytes. If they may start a TLS handshake record, keep
     reading until the whole record is in (the ClientHello can span several
     segments, and the SNI can sit anywhere in it), up to TLS_RECORD_MAX, EOF or
-    the timeout. Returns b"" if nothing arrived."""
+    the timeout. Returns b"" if nothing arrived. A record still incomplete when
+    this returns fails sni_verdict."""
     loop = asyncio.get_running_loop()
     deadline = None if timeout is None else loop.time() + timeout
     buf = b""
@@ -307,9 +328,7 @@ async def read_first(reader, timeout=None):
         if not chunk:
             break
         buf += chunk
-        if len(buf) >= 2 and not is_tls_handshake(buf):
-            break
-        if len(buf) >= 5 and len(buf) >= 5 + struct.unpack("!H", buf[3:5])[0]:
+        if not is_tls_handshake(buf) or tls_record_complete(buf):
             break
         if len(buf) >= TLS_RECORD_MAX:
             break

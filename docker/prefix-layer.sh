@@ -103,16 +103,31 @@ cmd_check() {
       echo "  ! $p is not linked to the base" >&2; bad=1
     fi
   done
-  # The base must be read-only in fact, not just by convention: try to create a
-  # file at its root and in each linked tree, and require every attempt to fail.
-  local d t
+  # The base must be read-only at the filesystem level, not just by convention:
+  # try to create a file at its root and in each linked tree, and require every
+  # attempt to fail with EROFS. EACCES does not count: a filesystem this user
+  # merely lacks permission on is still writable by root or another uid.
+  local d t r
   for d in "$BASE" "${BASE_PATHS[@]/#/$BASE/}"; do
     [ -d "$d" ] || continue
     t="$d/.layer-ro-probe.$$"
-    if ( : > "$t" ) 2>/dev/null; then
-      rm -f "$t"
-      echo "  ! base is writable at $d (run the container with --read-only)" >&2; bad=1
-    fi
+    r="$(python3 - "$t" <<'EOF'
+import errno, os, sys
+try:
+    fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except OSError as e:
+    print(errno.errorcode.get(e.errno, str(e.errno)))
+else:
+    os.close(fd)
+    os.unlink(sys.argv[1])
+    print("created")
+EOF
+)"
+    case "$r" in
+      EROFS) ;;
+      created) echo "  ! base is writable at $d (run the container with --read-only)" >&2; bad=1 ;;
+      *) echo "  ! base at $d is not on a read-only filesystem (create failed with $r, not EROFS; run the container with --read-only)" >&2; bad=1 ;;
+    esac
   done
   # Every state path must live in the state layer, never resolve into the base.
   while IFS= read -r p; do
