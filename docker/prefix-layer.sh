@@ -37,8 +37,11 @@ MARKER=".layer-base"
 
 [ -d "$BASE" ]  || { echo "FAIL: base prefix '$BASE' not found" >&2; exit 1; }
 [ -d "$STATE" ] || { echo "FAIL: state layer '$STATE' not found (mount a volume or tmpfs there)" >&2; exit 1; }
+# prefix-state.sh's state_paths() expands STATE_GLOBS against $WINEPREFIX when it
+# is called, not when it is sourced, so point it at the state layer for good.
+export WINEPREFIX="$STATE"
 # shellcheck source=prefix-state.sh
-WINEPREFIX="$STATE" source "$HERE/prefix-state.sh"   # STATE_GLOBS, BASE_PATHS
+source "$HERE/prefix-state.sh"   # STATE_GLOBS, BASE_PATHS, state_paths
 
 is_base() { local p; for p in "${BASE_PATHS[@]}"; do [ "$1" = "$p" ] && return 0; done; return 1; }
 
@@ -50,7 +53,24 @@ cmd_assemble() {
     return 0
   fi
   [ -w "$STATE" ] || { echo "FAIL: state layer '$STATE' is not writable by $(id -un)" >&2; exit 1; }
-  find "$STATE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  # The state layer is wiped below, so refuse anything that is not plainly ours:
+  # the root, the base (or a dir containing it, or inside it), and a non-empty
+  # dir that was never assembled (no marker), e.g. a wrongly mounted volume.
+  local st bs
+  st="$(realpath "$STATE")"; bs="$(realpath "$BASE")"
+  case "$st" in
+    /|/home|/root|/home/wine|"$bs"|"$bs"/*)
+      echo "FAIL: refusing to use '$STATE' as the state layer" >&2; exit 1 ;;
+  esac
+  case "$bs" in
+    "$st"/*) echo "FAIL: state layer '$STATE' contains the base '$BASE'" >&2; exit 1 ;;
+  esac
+  if [ ! -f "$STATE/$MARKER" ] \
+     && [ -n "$(find "$STATE" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)" ]; then
+    echo "FAIL: '$STATE' is not empty and was not assembled by prefix-layer.sh; refusing to wipe it" >&2
+    exit 1
+  fi
+  find "$STATE" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
 
   # Prefix root: registry hives, bookkeeping, dosdevices (c: -> ../drive_c, z: -> /).
   ( cd "$BASE" && find . -mindepth 1 -maxdepth 1 ! -name drive_c -exec cp -a {} "$STATE/" \; )

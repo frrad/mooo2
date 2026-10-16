@@ -64,7 +64,8 @@ command -v python3 >/dev/null 2>&1 || { echo "FAIL: python3 not found in image."
 
 # Locate the client (same discovery as verify-launch.sh).
 if [ -z "$EXE" ]; then
-  EXE="$(cat /home/wine/.kakao_exe_path 2>/dev/null || true)"
+  # KAKAO_EXE is set by prefix-layer.sh run (the client's path inside the layer).
+  EXE="${KAKAO_EXE:-$(cat /home/wine/.kakao_exe_path 2>/dev/null || true)}"
   if [ -z "$EXE" ] || [ ! -f "$EXE" ]; then
     EXE="$(find "$WINEPREFIX/drive_c" -iname 'KakaoTalk.exe' 2>/dev/null | head -1 || true)"
   fi
