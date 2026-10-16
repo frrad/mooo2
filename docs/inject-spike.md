@@ -99,13 +99,15 @@ next. Spike A is the cheap, account-free probe that must pass first.
 
 ## Known limitation
 
-`box-proxy.sh` picks the **first** client-bundled DLL the exe statically imports and
-does not fall back. If a re-baseline onto a new client build makes that first pick
-import-by-ordinal (name-based forwarders would not satisfy it) or export nothing
-usable, the spike FAILs even if another bundled import would have worked — a
-false-FAIL, not a false-PASS. If that happens, extend the discovery loop to try the
-next candidate (verify the proxy links with a non-zero forwarder count, else
-continue).
+`box-proxy.sh` walks the client-bundled DLLs the exe statically imports in name
+order and uses the first one for which a proxy builds with at least one name-based
+forwarder. A candidate is skipped (with a message on stderr) if forwarder
+generation fails, it exports nothing by name (e.g. import-by-ordinal only, which
+name-based forwarders cannot satisfy), or the proxy fails to link. The script fails
+only when no candidate qualifies. Not detected at build time: a candidate that
+links with forwarders but still does not satisfy the exe's imports at runtime
+(for example, some imports are by ordinal while others are by name); that still
+shows up as a spike FAIL.
 
 ## Scope and safety (DESIGN §11)
 
