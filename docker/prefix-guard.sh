@@ -7,7 +7,7 @@
 # privileged / CAP_SYS_ADMIN container:
 #
 #   1. Structural read-only base. Bind-remount the immutable install
-#      (drive_c/windows, drive_c/Program Files) READ-ONLY, so the client cannot
+#      (BASE_PATHS in prefix-state.sh) READ-ONLY, so the client cannot
 #      write outside its state (writes fail EROFS) and reads of unprovisioned base
 #      paths fail ENOENT. The prefix itself is bind-mounted to itself first, which
 #      also bounds the fanotify scope below to the prefix subtree.
@@ -33,7 +33,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=prefix-state.sh
-source "$HERE/prefix-state.sh"   # STATE_GLOBS (single source of truth)
+source "$HERE/prefix-state.sh"   # STATE_GLOBS, BASE_PATHS (single source of truth)
 
 SECONDS_HOLD="${LAUNCH_HOLD_SECONDS:-20}"
 LOG_ONLY=0
@@ -64,7 +64,8 @@ command -v python3 >/dev/null 2>&1 || { echo "FAIL: python3 not found in image."
 
 # Locate the client (same discovery as verify-launch.sh).
 if [ -z "$EXE" ]; then
-  EXE="$(cat /home/wine/.kakao_exe_path 2>/dev/null || true)"
+  # KAKAO_EXE is set by prefix-layer.sh run (the client's path inside the layer).
+  EXE="${KAKAO_EXE:-$(cat /home/wine/.kakao_exe_path 2>/dev/null || true)}"
   if [ -z "$EXE" ] || [ ! -f "$EXE" ]; then
     EXE="$(find "$WINEPREFIX/drive_c" -iname 'KakaoTalk.exe' 2>/dev/null | head -1 || true)"
   fi
@@ -86,7 +87,7 @@ fi
 BOUND=1
 
 if [ "$READONLY" -eq 1 ]; then
-  for rel in "drive_c/windows" "drive_c/Program Files"; do
+  for rel in "${BASE_PATHS[@]}"; do
     tgt="$WINEPREFIX/$rel"
     [ -d "$tgt" ] || continue
     mount --bind "$tgt" "$tgt"

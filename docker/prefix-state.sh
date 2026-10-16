@@ -38,6 +38,16 @@ STATE_GLOBS=(
   "drive_c/ProgramData/Kakao"
 )
 
+# The immutable base: the Wine system tree and the installed client. Identical
+# every run and never written by the client. prefix-guard.sh remounts these
+# read-only in place; prefix-layer.sh links them read-only into a separate state
+# layer. Disjoint from STATE_GLOBS (prefix-layer.sh checks).
+BASE_PATHS=(
+  "drive_c/windows"
+  "drive_c/Program Files"
+  "drive_c/Program Files (x86)"
+)
+
 # Existing state paths (relative to the prefix), one per line.
 state_paths() {
   local g p

@@ -352,7 +352,11 @@ this as plan B; do not build it unless the spike forces it.
      byte-identical from a capture, and the unmodified client runs seized.
   4. Layered prefix: immutable read-only base + writable state layer on a volume,
      plus a dedicated payload dir for a future tap DLL (see [`boxing.md`](boxing.md)).
-     Structural; pairs with (2)/(3) and pre-positions Tier 2.
+     Structural; pairs with (2)/(3) and pre-positions Tier 2. **Done** —
+     `prefix-layer.sh`: the image's prefix is the read-only base (with
+     `docker run --read-only`), the state layer is a tmpfs or volume holding the
+     whole `STATE_GLOBS` set, and `C:\injector` is the payload dir. Checked by
+     `verify-layered.sh` (`make layered-spike`).
 - **Future work — Tier 2 (in-process), explicitly out of scope for now.** Only
   after Tier 1 is delivering, and gated on a runtime anti-tamper check: attempt one
   crypto-seam tap, confirm the protected process tolerates it, and only then
