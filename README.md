@@ -31,6 +31,8 @@ is what ships.
   client's native IPC surface.
 - [`docs/inject-spike.md`](docs/inject-spike.md) — Spike A: proving an injected
   DLL loads into the boxed client under Wine (the gate for driving and taps).
+- [`docs/contract.md`](docs/contract.md) — the v0 `Input`/`Output` contract
+  types, their text formats, and the comparator's equality policy.
 
 ## Status
 
