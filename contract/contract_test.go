@@ -206,7 +206,7 @@ func TestFrameValidate(t *testing.T) {
 }
 
 func TestProject(t *testing.T) {
-	in, out, rest, err := Project(sampleFrames())
+	in, out, rest, err := Project(nil, sampleFrames())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,12 +234,36 @@ func TestProject(t *testing.T) {
 
 	// A payload field the contract does not know is an error, not dropped.
 	bad := []Frame{frame(1, TapStorage, DirNA, AltRecord, `{"store":"s","op":"insert","key":"k","extra":1}`)}
-	if _, _, _, err := Project(bad); err == nil {
+	if _, _, _, err := Project(nil, bad); err == nil {
 		t.Error("Project accepted an unknown payload field")
 	}
 	// A cause must resolve within the projected input.
 	dangling := []Frame{frame(1, TapDecision, DirNA, AltDecision, `{"request":"X","trigger":"t","cause":"in:0"}`)}
-	if _, _, _, err := Project(dangling); err == nil {
+	if _, _, _, err := Project(nil, dangling); err == nil {
 		t.Error("Project accepted a dangling cause")
+	}
+}
+
+// Regression: outputs caused by a driven command must resolve against the
+// commands passed in, which never appear on the bus.
+func TestProjectCommandCause(t *testing.T) {
+	frames := []Frame{
+		frame(1, TapCrypto, DirOut, AltPacket, `{"packetId":1,"status":0,"method":"WRITE","bodyType":0,"body":{},"cause":"cmd:c1"}`),
+		frame(2, TapDecision, DirNA, AltDecision, `{"request":"WRITE","trigger":"command","cause":"cmd:c1"}`),
+	}
+	cmds := []Command{{ID: "c1", Action: ActionSend}}
+	in, out, _, err := Project(cmds, frames)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if len(in.Commands) != 1 || in.Commands[0].ID != "c1" {
+		t.Errorf("commands = %+v", in.Commands)
+	}
+	if len(out.Outbound) != 1 || out.Outbound[0].Cause != CommandRef("c1") {
+		t.Errorf("outbound = %+v", out.Outbound)
+	}
+	// Without the command, the cause is dangling.
+	if _, _, _, err := Project(nil, frames); err == nil {
+		t.Error("Project resolved cmd:c1 with no commands")
 	}
 }

@@ -185,9 +185,13 @@ func parseFrame(line []byte) (Frame, error) {
 // Model-tap frames are returned unprojected. Provisional: how structured
 // objects map onto Outbound and Events is open until the crypto and model
 // taps can be compared on real traffic (docs/instrumentation.md §8,
-// "altitude duplication"). Commands come from the command RPC, not the bus,
-// so the returned Input has none.
-func Project(frames []Frame) (in Input, out Output, unprojected []Frame, err error) {
+// "altitude duplication").
+//
+// Commands come from the command RPC, not the bus, so the caller passes the
+// commands driven during the run. They become Input.Commands, and output
+// causes of the form cmd:<id> resolve against them.
+func Project(commands []Command, frames []Frame) (in Input, out Output, unprojected []Frame, err error) {
+	in.Commands = commands
 	for _, f := range frames {
 		if err = f.Validate(); err != nil {
 			return
