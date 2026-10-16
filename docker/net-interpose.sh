@@ -7,7 +7,7 @@
 # user's uid (the client, wineserver and every helper run as it):
 #   - IPv4 DNS (port 53, any server, including Docker's 127.0.0.11) -> DNS stub
 #   - every other IPv4 TCP connection off loopback                  -> TCP proxy
-#   - loopback                                                      -> allowed
+#   - loopback, except Docker's resolver 127.0.0.11           -> allowed
 #   - anything else (UDP, ICMP, IPv6, ...)                          -> dropped, counted
 # The stub and proxy are net-interpose.py, run as root so their own traffic is not
 # redirected. Allowed flows are spliced to the real server and fanned out to
@@ -27,6 +27,7 @@ UID_BOX="${NET_UID:-1000}"
 DNS_PORT=15353
 TCP_PORT=15001
 TABLE=kakao_net
+MARK=0x6b616b6f   # conntrack mark on flows we redirected
 
 need_root() {
   if [ "$(id -u)" != 0 ]; then
@@ -41,22 +42,31 @@ ruleset() {
 table inet $TABLE {
   counter drop_udp {}
   counter drop_ipv6 {}
+  counter drop_resolver {}
   counter drop_other {}
 
+  # Priority -101 (dstnat - 1): ahead of Docker's own nat OUTPUT rules on
+  # user-defined networks, which DNAT 127.0.0.11:53 to the embedded resolver at
+  # -100. The first DNAT on a connection wins, so ours must come first. Every
+  # flow we redirect gets a conntrack mark, and the filter accepts only that
+  # mark rather than any DNAT, so nobody else's DNAT can open a path out.
   chain nat_out {
-    type nat hook output priority -100; policy accept;
-    meta skuid $UID_BOX meta nfproto ipv4 udp dport 53 redirect to :$DNS_PORT
-    meta skuid $UID_BOX meta nfproto ipv4 tcp dport 53 redirect to :$TCP_PORT
+    type nat hook output priority -101; policy accept;
+    meta skuid $UID_BOX meta nfproto ipv4 udp dport 53 ct mark set $MARK redirect to :$DNS_PORT
+    meta skuid $UID_BOX meta nfproto ipv4 tcp dport 53 ct mark set $MARK redirect to :$TCP_PORT
     meta skuid $UID_BOX ip daddr 127.0.0.0/8 return
-    meta skuid $UID_BOX meta nfproto ipv4 meta l4proto tcp redirect to :$TCP_PORT
+    meta skuid $UID_BOX meta nfproto ipv4 meta l4proto tcp ct mark set $MARK redirect to :$TCP_PORT
   }
 
   chain filter_out {
     type filter hook output priority 0; policy accept;
-    meta skuid $UID_BOX oifname "lo" accept
     # Redirected flows keep their pre-NAT output interface here, so match them
-    # by conntrack status rather than by "lo".
-    meta skuid $UID_BOX ct status dnat accept
+    # by our conntrack mark rather than by "lo".
+    meta skuid $UID_BOX ct mark $MARK accept
+    # Docker's embedded resolver listens on 127.0.0.11 (on a random port after
+    # its DNAT). Reaching it directly would be DNS egress we did not see.
+    meta skuid $UID_BOX ip daddr 127.0.0.11 counter name drop_resolver drop
+    meta skuid $UID_BOX oifname "lo" accept
     meta skuid $UID_BOX meta nfproto ipv6 counter name drop_ipv6 drop
     meta skuid $UID_BOX meta l4proto udp counter name drop_udp drop
     meta skuid $UID_BOX counter name drop_other drop
@@ -93,7 +103,7 @@ cmd_up() {
 
 cmd_counters() {
   local c
-  for c in drop_udp drop_ipv6 drop_other; do
+  for c in drop_udp drop_ipv6 drop_resolver drop_other; do
     printf '%s=%s ' "$c" \
       "$(nft list counter inet "$TABLE" "$c" 2>/dev/null | awk '/packets/{print $2; exit}')"
   done

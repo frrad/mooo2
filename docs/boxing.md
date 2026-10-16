@@ -67,7 +67,12 @@ inside the container's network namespace, without touching the client:
 - **nftables rules on the wine user's uid** (the client, `wineserver` and every
   Wine helper run as it). IPv4 DNS to any server goes to a DNS stub, every other
   IPv4 TCP connection off loopback goes to a transparent proxy, loopback is
-  allowed, and everything else (UDP, ICMP, IPv6) is dropped and counted.
+  allowed, and everything else (UDP, ICMP, IPv6) is dropped and counted. The
+  redirect runs at nat priority -101, ahead of Docker's own DNS DNAT on
+  user-defined networks, and the filter accepts only flows carrying the
+  conntrack mark set by our own redirect, not any DNAT. Direct traffic to
+  Docker's embedded resolver (`127.0.0.11`, on its real port) is dropped and
+  counted.
 - **`net-interpose.py`**, running as root so its own traffic is not redirected.
   The DNS stub resolves allowlisted names for real and answers every other name
   with a unique sinkhole address from `198.18.0.0/15` (never routed). The client
@@ -91,7 +96,9 @@ make net-spike    # = docker run --rm --cap-add NET_ADMIN -u 0 <image> verify-ne
 interpose, then runs probes as the wine user: a DNS lookup, a TLS connection and a
 UDP send, each of which must be denied and logged (or counted), plus a connection
 to an allowlisted test server inside the container, whose reply must reach both
-the probe and a fan-out subscriber. It passes if all of that holds and the client
+the probe and a fan-out subscriber. On a user-defined network (`docker run
+--network <net>`) it also queries Docker's resolver directly, and that query must
+be dropped. It passes if all of that holds and the client
 is still running after the hold window. It also lists what the client itself
 tried to reach. Pre-login, that is a single HTTPS lookup of a Kakao CDN name.
 

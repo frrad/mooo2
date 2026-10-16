@@ -8,6 +8,8 @@
 #   3. the allow path and ingress fan-out work: an allowlisted connection to a test
 #      server inside the container is spliced through, and the server's reply is
 #      delivered both to the probe and, identically, to a fan-out subscriber.
+# On a Docker user-defined network it also queries Docker's embedded resolver
+# directly on its real port, which must be dropped.
 # It also lists what the client itself tried to reach, which is the starting point
 # for the login spike's allowlist (see docs/boxing.md).
 #
@@ -43,6 +45,12 @@ fi
 SELF_IP="$(python3 -c 'import socket;s=socket.socket(2,2);s.connect(("192.0.2.1",9));print(s.getsockname()[0])' 2>/dev/null || true)"
 [ -n "$SELF_IP" ] && [ "${SELF_IP#127.}" = "$SELF_IP" ] \
   || { echo "FAIL: no non-loopback address (run on a Docker network, not --network none)" >&2; exit 1; }
+
+# On a Docker user-defined network, the embedded resolver's real UDP port (the
+# target of Docker's own 127.0.0.11:53 DNAT). The probe queries it directly: that
+# must be dropped too. Empty on the default bridge, which has no such resolver.
+RESOLVER_PORT="$(nft list chain ip nat DOCKER_POSTROUTING 2>/dev/null \
+  | awk '/127.0.0.11 udp sport/{for(i=1;i<=NF;i++) if($i=="sport") print $(i+1)}' | head -1 || true)"
 
 mkdir -p "$NET_RUN_DIR"
 PIDS=()
@@ -87,9 +95,9 @@ echo ">> launching: $EXE (hold ${HOLD}s)"
 disown $!   # cleanup SIGKILLs it; keep bash from reporting the job
 
 # --- Probes, as the boxed user (so they hit the same rules as the client) -------
-"${BOX[@]}" python3 - "$SELF_IP" "$TEST_PORT" >"$NET_RUN_DIR/probe.log" 2>&1 <<'EOF' || true
-import socket, ssl, sys
-self_ip, port = sys.argv[1], int(sys.argv[2])
+"${BOX[@]}" python3 - "$SELF_IP" "$TEST_PORT" "${RESOLVER_PORT:-0}" >"$NET_RUN_DIR/probe.log" 2>&1 <<'EOF' || true
+import socket, ssl, struct, sys
+self_ip, port, rport = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 try:
     print("dns", socket.gethostbyname("probe-blocked.example"))
 except OSError as e:
@@ -106,6 +114,15 @@ try:
     u.sendto(b"probe", ("192.0.2.1", 123)); print("udp sent")
 except OSError as e:
     print("udp-error", e)
+if rport:
+    q = struct.pack("!HHHHHH", 0x6b6b, 0x0100, 1, 0, 0, 0)
+    q += b"".join(bytes([len(l)]) + l.encode() for l in "probe-direct.example".split(".")) + b"\0"
+    q += struct.pack("!HH", 1, 1)
+    r = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); r.settimeout(3)
+    try:
+        r.sendto(q, ("127.0.0.11", rport)); r.recvfrom(512); print("resolver-direct answered")
+    except OSError as e:
+        print("resolver-direct blocked", type(e).__name__)
 with socket.create_connection((self_ip, port), timeout=10) as c:
     c.sendall(b"ping\n"); print("allow-reply", c.recv(64).decode().strip())
 EOF
@@ -122,7 +139,7 @@ echo "----- dropped (nftables) -----"; echo "$COUNTERS"
 
 # --- Judge ---------------------------------------------------------------------
 REPORT="$(python3 - "$EVENTS" "$NET_RUN_DIR/fanout.jsonl" "$NET_RUN_DIR/probe.log" \
-            "$TEST_REPLY" "$COUNTERS" <<'EOF'
+            "$TEST_REPLY" "$COUNTERS" "${RESOLVER_PORT:-}" <<'EOF'
 import base64, json, sys
 events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 fan = [json.loads(l) for l in open(sys.argv[2]) if l.strip()] if __import__("os").path.exists(sys.argv[2]) else []
@@ -138,6 +155,9 @@ checks = {
                            for e in events),
     "udp-dropped": int(counters.get("drop_udp") or 0) >= 1,
     "allow-spliced": ("allow-reply " + reply) in probe,
+    # Only on a user-defined network (sys.argv[6] = the resolver's real port).
+    "resolver-direct-dropped": (not sys.argv[6]) or (
+        "resolver-direct blocked" in probe and int(counters.get("drop_resolver") or 0) >= 1),
     "fanout-ingress": any(f.get("dir") == "in" and base64.b64decode(f["b64"]).decode(
                           "ascii", "replace").strip() == reply for f in fan),
 }
