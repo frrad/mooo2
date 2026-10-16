@@ -11,7 +11,7 @@ PLATFORM   ?= linux/amd64
 # Pick the available sha-256 tool (sha256sum on Linux, shasum on macOS).
 SHATOOL := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 
-.PHONY: help fetch verify rebaseline build run inject-spike net-spike shell clean
+.PHONY: help fetch verify rebaseline build run inject-spike net-spike seize-spike shell clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -47,6 +47,9 @@ inject-spike: ## Run Spike A: prove an injected DLL loads into the client (docs/
 
 net-spike: ## Launch behind default-deny egress; check blocking is logged and fan-out works
 	docker run --rm --platform=$(PLATFORM) --cap-add NET_ADMIN -u 0 $(IMAGE) /usr/local/bin/verify-net.sh
+
+seize-spike: ## Check clock + RNG seize: probe replays from a capture; client runs seized
+	docker run --rm --platform=$(PLATFORM) $(IMAGE) /usr/local/bin/verify-seize.sh
 
 shell: ## Open an interactive shell in the image for debugging the prefix
 	docker run --rm -it --platform=$(PLATFORM) $(IMAGE) /bin/bash

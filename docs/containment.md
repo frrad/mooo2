@@ -91,6 +91,12 @@ in any internal address.
   tree pins and advances wall clock deterministically; for monotonic sources that
   faketime cannot reach, a thin Wine `ntdll` time shim is the fallback. Record the
   stream on the reference, inject it into the candidate (DESIGN §5.1 "seized").
+- **Implemented** by [`../docker/seize.sh`](../docker/seize.sh). The fallback is
+  not needed: libfaketime also fakes the host monotonic clock, so
+  `QueryPerformanceCounter` and `GetTickCount64` move with the pinned wall clock
+  (`verify-seize.sh` asserts both read the pinned epoch). The clock starts at a chosen instant and advances
+  in real time; the start instant is the captured input. Code that reads `RDTSC`
+  directly bypasses the host clock and is out of reach (residual, like scheduling).
 
 ### RNG / entropy — seized
 
@@ -102,6 +108,20 @@ in any internal address.
   "seize" move as the clock and is what makes crypto-bearing output diffable at
   all (DESIGN §5.1). Doing it at Wine's `ntdll` rather than inside the client keeps
   it out-of-binary and anti-tamper-safe.
+- **Implemented** by [`../docker/rng-seize.c`](../docker/rng-seize.c), loaded by
+  `seize.sh`. Under Wine every Windows CSPRNG API (`BCryptGenRandom`,
+  `RtlGenRandom`, `CryptGenRandom`, `ProcessPrng`, `rand_s`, `UuidCreate`) ends in
+  one host call, `getrandom()`, made by Wine's unix-side `ntdll.so`. The shim
+  replaces that call with an `LD_PRELOAD` library, so it sits *below* the Windows
+  modules the protector can inspect. With a seed, each process gets its own stream
+  derived from the seed and its exe name, and every byte served is logged per
+  process. The capture is the seed plus the clock start (one env file), and replay
+  is the same file. `verify-seize.sh` checks that all six APIs replay byte-identical
+  from a capture. Residual: in-process `RDRAND`/`RDSEED` instructions never reach
+  the OS, and replay is exact only per process and draw order (concurrent
+  threads, same-name instances, and fork-without-exec are listed in
+  [`boxing.md`](boxing.md)). A seeded client's keys are predictable to us by design, so seed only a box
+  that uses a disposable account.
 
 ### Filesystem / local DB — snapshot
 
@@ -295,8 +315,8 @@ this as plan B; do not build it unless the spike forces it.
 | --- | --- | --- | --- |
 | Network (LOCO socket, HTTPS) | `WS2_32`, `WINHTTP`, `CRYPT32` | 1 | Container netns: gate egress, fan ingress |
 | Network plaintext | (crypto seam) | 2 — future | Injected DLL: before-encrypt / after-decrypt (or decrypt via seized RNG + candidate key schedule) |
-| Clock | `kernel32` time → Wine `ntdll` | 1 | `libfaketime` on Wine; `ntdll` time shim fallback |
-| RNG / entropy | `bcrypt`/`RtlGenRandom` → `ntdll` | 1 | Wine `ntdll` entropy shim: record/replay |
+| Clock | `kernel32` time → Wine `ntdll` | 1 | `libfaketime` on the Wine process tree (wall + monotonic) |
+| RNG / entropy | `bcrypt`/`RtlGenRandom` → `ntdll` → host `getrandom` | 1 | `rng-seize.so` under Wine's `ntdll`: seeded, logged, replayable |
 | Filesystem / local DB | `AppData\Local` in prefix | 1 (decoded records: 2 — future) | Prefix snapshot/diff; storage tap for records |
 | Registry | `ADVAPI32` `Reg*` | 1 | Prefix `*.reg` files: snapshot/diff/seed |
 | Device identity | `IPHLPAPI`, volume serial, machine GUID | 1 | Pin in prefix (Wine synthesizes all of it) |
@@ -326,7 +346,10 @@ this as plan B; do not build it unless the spike forces it.
      allowlist hook (`/etc/kakao/net-allowlist`) stays empty until the login
      spike.
   3. Clock seize (`libfaketime`) and RNG seize (`ntdll` shim) — the latter also
-     makes captured traffic decryptable via a candidate key schedule.
+     makes captured traffic decryptable via a candidate key schedule. **Done** —
+     `seize.sh` (libfaketime + `rng-seize.so` below Wine's `ntdll`), checked by
+     `verify-seize.sh` (`make seize-spike`): a probe replays all six CSPRNG APIs
+     byte-identical from a capture, and the unmodified client runs seized.
   4. Layered prefix: immutable read-only base + writable state layer on a volume,
      plus a dedicated payload dir for a future tap DLL (see [`boxing.md`](boxing.md)).
      Structural; pairs with (2)/(3) and pre-positions Tier 2.

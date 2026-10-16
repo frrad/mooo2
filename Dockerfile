@@ -54,8 +54,9 @@ ENV WINEPREFIX=/home/wine/.wine \
 
 # --- Tier 1 containment tooling (docs/containment.md) ----------------------------
 # Its own layer so the Wine layer above stays cached. nftables: egress interpose.
+# libfaketime + a native gcc: clock and RNG seize (seize.sh, rng-seize.c).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends nftables \
+ && apt-get install -y --no-install-recommends nftables libfaketime gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Boxing scripts + grey-box tap seam ----------------------------------------
@@ -65,6 +66,7 @@ COPY docker/box-install.sh docker/box-proxy.sh docker/entrypoint.sh \
      docker/prefix-state.sh docker/prefix-trace.sh \
      docker/prefix-guard.sh docker/prefix-guard.py \
      docker/net-interpose.sh docker/net-interpose.py docker/verify-net.sh \
+     docker/seize.sh docker/verify-seize.sh \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/local/bin/entrypoint.sh \
              /usr/local/bin/verify-launch.sh /usr/local/bin/verify-inject.sh \
@@ -72,10 +74,17 @@ RUN chmod +x /usr/local/bin/box-install.sh /usr/local/bin/box-proxy.sh /usr/loca
              /usr/local/bin/prefix-state.sh /usr/local/bin/prefix-trace.sh \
              /usr/local/bin/prefix-guard.sh /usr/local/bin/prefix-guard.py \
              /usr/local/bin/net-interpose.sh /usr/local/bin/net-interpose.py \
-             /usr/local/bin/verify-net.sh
+             /usr/local/bin/verify-net.sh \
+             /usr/local/bin/seize.sh /usr/local/bin/verify-seize.sh
 # Egress allowlist for the interpose: empty (deny all) by default. Mount over it
 # for the login spike (docs/boxing.md).
 COPY docker/net-allowlist /etc/kakao/net-allowlist
+# Clock/RNG seize: the host-side getrandom shim and the Windows-side probe.
+COPY docker/rng-seize.c docker/seize-probe.c /usr/local/src/mooo/
+RUN mkdir -p /usr/local/lib/mooo \
+ && gcc -O2 -Wall -shared -fPIC -o /usr/local/lib/mooo/rng-seize.so /usr/local/src/mooo/rng-seize.c -ldl \
+ && x86_64-w64-mingw32-gcc -O2 -o /usr/local/lib/mooo/seize-probe.exe /usr/local/src/mooo/seize-probe.c \
+      -lbcrypt -ladvapi32 -lrpcrt4
 COPY patches/ /opt/patches/
 RUN chmod +x /opt/patches/dllproxy/gen-forwarders.sh
 
