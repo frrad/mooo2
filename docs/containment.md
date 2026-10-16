@@ -66,7 +66,11 @@ in any internal address.
     nothing leaves the box; denied names get a never-routed sinkhole address so
     the client's follow-up connection, port and TLS server name are logged too.
     Allowed flows are spliced to the server and every chunk is published to
-    read-only fan-out subscribers. Needs `CAP_NET_ADMIN`. See
+    read-only fan-out subscribers. When a flow is allowed by name, its TLS
+    ClientHello must also name an allowlisted host, so a shared CDN address
+    does not open a path to other names. Each subscriber's queue is bounded,
+    and a subscriber that falls behind is dropped and logged, so it never
+    stalls the reference. Needs `CAP_NET_ADMIN`. See
     [`boxing.md`](boxing.md) for usage.
   - Limitation: at this layer the LOCO payload is **ciphertext**. You can prove
     *what bytes* crossed, not *what they mean* — until RNG is seized (below). With
@@ -95,7 +99,17 @@ in any internal address.
   not needed: libfaketime also fakes the host monotonic clock, so
   `QueryPerformanceCounter` and `GetTickCount64` move with the pinned wall clock
   (`verify-seize.sh` asserts both read the pinned epoch). The clock starts at a chosen instant and advances
-  in real time; the start instant is the captured input. Code that reads `RDTSC`
+  in real time; the start instant is the captured input. It is one clock for
+  the whole process tree. `seize.sh` turns the start instant into a fixed offset
+  from the real clock (`FAKETIME="±seconds"`), not libfaketime's per-process
+  `@start` mode. `@start` shares its start instant only through a shm segment
+  named in `FAKETIME_SHARED`. `FAKETIME_DONT_RESET` depends on that segment, and
+  libfaketime creates it itself (Debian 0.9.10), so the variable does not have to
+  be set by hand. Under Wine the segment does not reach every process, though:
+  `wineboot` is spawned without it and starts a second clock that `services.exe`
+  and the other system processes inherit, and a process started after the
+  segment's creator exits restarts at the pinned instant. `verify-seize.sh`
+  checks the second case with a chain of probe processes. Code that reads `RDTSC`
   directly bypasses the host clock and is out of reach (residual, like scheduling).
 
 ### RNG / entropy — seized

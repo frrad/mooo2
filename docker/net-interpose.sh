@@ -75,6 +75,16 @@ table inet $TABLE {
 EOF
 }
 
+stop_daemon() {
+  local pid
+  [ -f "$RUN_DIR/pid" ] || return 0
+  pid="$(cat "$RUN_DIR/pid")"
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$RUN_DIR/pid"
+}
+
 cmd_up() {
   need_root
   command -v nft >/dev/null || { echo "FAIL: nft not found in image" >&2; exit 2; }
@@ -93,10 +103,17 @@ cmd_up() {
   if ! grep -q 'net-interpose: up' "$RUN_DIR/daemon.log" 2>/dev/null; then
     echo "FAIL: net-interpose.py did not start" >&2
     cat "$RUN_DIR/daemon.log" >&2 || true
+    stop_daemon
     exit 1
   fi
   nft delete table inet "$TABLE" 2>/dev/null || true
-  ruleset | nft -f -
+  if ! ruleset | nft -f -; then
+    # No rules, so nothing is gated: do not leave a daemon (and pid file) behind
+    # that would make the box look interposed.
+    echo "FAIL: nft -f rejected the ruleset; stopping net-interpose.py" >&2
+    stop_daemon
+    exit 1
+  fi
   cat "$RUN_DIR/daemon.log"
   echo ">> egress default-deny for uid $UID_BOX (log: $RUN_DIR/events.jsonl)"
 }
@@ -114,11 +131,7 @@ cmd_down() {
   need_root
   # Stop the client before calling this: once the table is gone, its egress is no
   # longer gated. The daemon goes first so no flow is spliced during teardown.
-  if [ -f "$RUN_DIR/pid" ]; then
-    kill "$(cat "$RUN_DIR/pid")" 2>/dev/null || true
-    for _ in $(seq 1 30); do kill -0 "$(cat "$RUN_DIR/pid")" 2>/dev/null || break; sleep 0.1; done
-    rm -f "$RUN_DIR/pid"
-  fi
+  stop_daemon
   nft delete table inet "$TABLE" 2>/dev/null || true
 }
 

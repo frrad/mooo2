@@ -6,7 +6,8 @@
 #            Its immutable trees (BASE_PATHS in prefix-state.sh: Wine's C:\windows
 #            and the installed client) are symlinked into the state layer, never
 #            copied. Run the container with --read-only and the base is read-only
-#            at the filesystem level: any write to it fails EROFS.
+#            at the filesystem level: any write to it fails EROFS. `check`
+#            probes this and fails if the base is writable.
 #   state    KAKAO_STATE (default /var/lib/kakao/prefix): a volume or tmpfs mounted
 #            by docker run, NOT the container's own overlay (overlay-on-overlay
 #            breaks; keep the frequently written state on a real mount). It holds
@@ -100,6 +101,17 @@ cmd_check() {
     [ -e "$BASE/$p" ] || continue
     if [ "$(readlink "$STATE/$p" 2>/dev/null)" != "$BASE/$p" ]; then
       echo "  ! $p is not linked to the base" >&2; bad=1
+    fi
+  done
+  # The base must be read-only in fact, not just by convention: try to create a
+  # file at its root and in each linked tree, and require every attempt to fail.
+  local d t
+  for d in "$BASE" "${BASE_PATHS[@]/#/$BASE/}"; do
+    [ -d "$d" ] || continue
+    t="$d/.layer-ro-probe.$$"
+    if ( : > "$t" ) 2>/dev/null; then
+      rm -f "$t"
+      echo "  ! base is writable at $d (run the container with --read-only)" >&2; bad=1
     fi
   done
   # Every state path must live in the state layer, never resolve into the base.
