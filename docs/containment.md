@@ -94,7 +94,7 @@ in any internal address.
 - **Implemented** by [`../docker/seize.sh`](../docker/seize.sh). The fallback is
   not needed: libfaketime also fakes the host monotonic clock, so
   `QueryPerformanceCounter` and `GetTickCount64` move with the pinned wall clock
-  (checked by `verify-seize.sh`). The clock starts at a chosen instant and advances
+  (`verify-seize.sh` asserts both read the pinned epoch). The clock starts at a chosen instant and advances
   in real time; the start instant is the captured input. Code that reads `RDTSC`
   directly bypasses the host clock and is out of reach (residual, like scheduling).
 
@@ -118,7 +118,9 @@ in any internal address.
   process. The capture is the seed plus the clock start (one env file), and replay
   is the same file. `verify-seize.sh` checks that all six APIs replay byte-identical
   from a capture. Residual: in-process `RDRAND`/`RDSEED` instructions never reach
-  the OS. A seeded client's keys are predictable to us by design, so seed only a box
+  the OS, and replay is exact only per process and draw order (concurrent
+  threads, same-name instances, and fork-without-exec are listed in
+  [`boxing.md`](boxing.md)). A seeded client's keys are predictable to us by design, so seed only a box
   that uses a disposable account.
 
 ### Filesystem / local DB — snapshot

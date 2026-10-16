@@ -161,7 +161,9 @@ reads every Windows clock and CSPRNG API. The probe runs three times: once with 
 pinned time and seed captured to an env file, once replayed from that file, and once
 with a different seed. The check passes if all of the following hold:
 
-- the clock reads the pinned date;
+- the wall clock reads the pinned date, and `QueryPerformanceCounter` and
+  `GetTickCount64` read within minutes of the pinned epoch (unseized, they read
+  host uptime);
 - all six random APIs return identical bytes on replay and different bytes under
   the other seed;
 - the unmodified client stays up seized, with both libraries mapped into
@@ -170,7 +172,20 @@ with a different seed. The check passes if all of the following hold:
 It also lists how much entropy each process drew. Pre-login, the client takes a few
 hundred seeded bytes.
 
-**Limits.** In-process `RDTSC`/`RDRAND` never reach the host and stay unseized.
+**Limits of the RNG stream.** Replay is exact only when each process draws in
+the same order:
+
+- Each process has one byte counter. Threads that draw concurrently interleave in
+  scheduling order, so multi-threaded draw order is not replay-stable. This is the
+  same residual as scheduling (DESIGN §9).
+- A stream is keyed by the exe name only. Two instances of the same exe get the
+  same stream.
+- A `fork` without `exec` inherits the counter and repeats its parent's stream.
+- The key is read from `argv[0]` on the first draw. A draw before Wine rewrites
+  `argv` would be keyed as the Wine loader (e.g. `wine64`). It is still
+  deterministic, but filed under that name in the `.rng` logs.
+
+**Other limits.** In-process `RDTSC`/`RDRAND` never reach the host and stay unseized.
 32-bit Wine helpers cannot load the 64-bit libraries (ld.so prints a "wrong ELF
 class" note) and run unseized; the x64 client and its x64 helpers are seized. For
 the login spike, pin a *current* time: TLS certificate checks fail under a date

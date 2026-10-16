@@ -3,7 +3,8 @@
 # verify-launch.sh it does NOT log in and needs no account. It proves:
 #   1. capture and replay: seize-probe.exe (our own program) reads every Windows
 #      clock and CSPRNG API. Run once with a pinned time and seed, captured to an
-#      env file, then again from that capture: the clock reads the pinned date and
+#      env file, then again from that capture: the wall clock reads the pinned date,
+#      QueryPerformanceCounter and GetTickCount64 sit at the pinned epoch, and
 #      every random API returns the same bytes. A third run with another seed must
 #      differ, so the bytes really come from the seed.
 #   2. the UNMODIFIED client launches and stays up seized, with both seize
@@ -37,7 +38,7 @@ probe() {   # probe <name> <seize args...>
     >"$RUN/$name.txt" 2>"$RUN/$name.err" || true
   wineserver -k >/dev/null 2>&1 || true; wineserver -w 2>/dev/null || true
 }
-field() { awk -v k="$1" '$1==k{print $2}' "$2"; }
+field() { tr -d '\r' < "$2" | awk -v k="$1" '$1==k{print $2}'; }
 
 # --- 1. Probe: capture, replay, different seed ----------------------------------
 probe record --time "$PIN_TIME" --seed 0x5eed --capture "$RUN/seize.env"
@@ -50,6 +51,17 @@ echo "----- capture ($RUN/seize.env) -----"; cat "$RUN/seize.env"
 for k in systime systime_precise localtime; do
   v="$(field "$k" "$RUN/record.txt")"
   [ "${v:0:10}" = "$PIN_DATE" ] || FAILS+=("clock: $k=$v, want $PIN_DATE")
+done
+# libfaketime also fakes the host monotonic clock, which Wine's
+# QueryPerformanceCounter and GetTickCount64 read: under the "@" start spec it
+# reports the pinned epoch, so both counters must sit within minutes of it. An
+# unseized counter reads host uptime instead.
+PIN_EPOCH="$(date -u -d "${PIN_TIME#@}" +%s)"
+for k in qpc_seconds tick_seconds; do
+  v="$(field "$k" "$RUN/record.txt")"
+  if ! [[ "$v" =~ ^[0-9]+$ ]] || [ $((v - PIN_EPOCH)) -lt 0 ] || [ $((v - PIN_EPOCH)) -gt 600 ]; then
+    FAILS+=("clock: $k=$v, want within 600s after $PIN_EPOCH")
+  fi
 done
 SAME=0
 for k in $APIS; do
@@ -91,7 +103,7 @@ echo "----- entropy served per process (client run) -----"
 for f in "$RUN"/client.rng/*.rng; do [ -f "$f" ] && echo "  $(basename "$f") $(stat -c %s "$f") bytes"; done
 
 if [ "${#FAILS[@]}" -eq 0 ]; then
-  echo "PASS: clock pinned to $PIN_DATE and $SAME/6 CSPRNG APIs replay byte-identical from the capture; KakaoTalk stayed up ${HOLD}s seized (drew ${CLIENT_BYTES} seeded bytes)"
+  echo "PASS: clock (wall, QPC, tick) pinned to $PIN_DATE and $SAME/6 CSPRNG APIs replay byte-identical from the capture; KakaoTalk stayed up ${HOLD}s seized (drew ${CLIENT_BYTES} seeded bytes)"
   exit 0
 fi
 echo "FAIL: clock/RNG seize check did not pass" >&2

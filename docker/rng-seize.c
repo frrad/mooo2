@@ -20,8 +20,12 @@
  * byte the client used. Replay = same seed. Only ever use a seeded box with a
  * disposable account (DESIGN §11).
  *
+ * Limits: one counter per process, so concurrent threads draw in scheduling
+ * order; the stream is keyed by exe name only (same-name instances share it); a
+ * fork without exec repeats the parent's stream; the key is read from argv[0] at
+ * the first draw, so a draw before Wine rewrites argv is keyed as the loader.
  * Out of reach: randomness the client makes without asking the OS (RDRAND /
- * RDSEED instructions, timing jitter). See docs/containment.md.
+ * RDSEED instructions, timing jitter). See docs/boxing.md.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
