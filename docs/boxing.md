@@ -78,12 +78,23 @@ inside the container's network namespace, without touching the client:
   with a unique sinkhole address from `198.18.0.0/15` (never routed). The client
   then still tries to connect, so the proxy logs the port and the TLS server name
   it wanted before resetting the connection. Allowlisted connections are spliced
-  to the real server.
+  to the real server. A destination that is allowed only because an allowlisted
+  name resolved to it may be a shared CDN address, so if the client opens with a
+  TLS ClientHello, its SNI must be allowlisted (for that port) as well. A
+  mismatch, or a ClientHello with no SNI, is denied and logged (`"reason":"sni"`)
+  before any byte reaches the server. So is any opening byte 0x16 (a TLS
+  handshake record) whose record is not complete and parseable within 2 s, so a
+  hello trickled in to slip past the check is refused. Address-allowlisted
+  destinations and flows that do not open with 0x16 are not SNI-checked.
 - **Ingress fan-out (Shadow mode).** With `--fanout HOST:PORT`, every chunk of an
   allowed flow is also sent to each connected subscriber as a JSON line
   (`{"conn","dir":"in"|"out","b64"}`). Inbound is received once and delivered to
   the reference and the subscribers identically. Subscribers can only read, so a
-  candidate attached here runs dry-run by construction.
+  candidate attached here runs dry-run by construction. Subscribers never slow
+  the reference down. Each has its own queue, bounded by `--fanout-limit` bytes
+  (default 8 MiB), and a subscriber that falls that far behind is disconnected
+  and logged (`"kind":"fanout","verdict":"drop"`). It is not left to buffer
+  without bound, and it does not silently skip chunks.
 - **Decision log** — `events.jsonl` in `$NET_RUN_DIR` (default
   `/tmp/net-interpose`): one JSON line per DNS or TCP verdict, names and addresses
   only, never payload. It is still a lab artifact; do not commit it.
@@ -96,7 +107,10 @@ make net-spike    # = docker run --rm --cap-add NET_ADMIN -u 0 <image> verify-ne
 interpose, then runs probes as the wine user: a DNS lookup, a TLS connection and a
 UDP send, each of which must be denied and logged (or counted), plus a connection
 to an allowlisted test server inside the container, whose reply must reach both
-the probe and a fan-out subscriber. On a user-defined network (`docker run
+the probe and a fan-out subscriber. It also checks the SNI gate: a name allowlisted
+for a second test port resolves to that server through the stub, and only a
+ClientHello naming it gets through. Finally, it checks the fan-out bound: a 16 MiB
+download must reach the probe intact while a stalled subscriber is dropped. On a user-defined network (`docker run
 --network <net>`) it also queries Docker's resolver directly, and that query must
 be dropped. It passes if all of that holds and the client
 is still running after the hold window. It also lists what the client itself
@@ -130,7 +144,9 @@ normally `wine …`, with two `LD_PRELOAD` libraries on the Wine process tree:
 - **libfaketime** pins the wall clock to a start instant (`--time "@2025-01-01
   00:00:00"`, default: now) and lets it advance in real time. It fakes the host
   monotonic clock too, so `QueryPerformanceCounter` and `GetTickCount64` are covered
-  as well.
+  as well. `seize.sh` hands libfaketime a fixed offset from the real clock rather
+  than its per-process `@start` mode, so every process in the tree reads the same
+  clock (see [`containment.md`](containment.md) "Clock" for why).
 - **`rng-seize.so`** ([`../docker/rng-seize.c`](../docker/rng-seize.c)) replaces
   `getrandom()`, the one host call that Wine's `ntdll` makes for every Windows
   CSPRNG API. With `--seed N`, each process gets a stream derived from the seed and
@@ -166,6 +182,8 @@ with a different seed. The check passes if all of the following hold:
   host uptime);
 - all six random APIs return identical bytes on replay and different bytes under
   the other seed;
+- a chain of probe processes reads one continuous clock: the first exits before
+  the last starts, and the last must not read earlier than the one before it;
 - the unmodified client stays up seized, with both libraries mapped into
   `KakaoTalk.exe`.
 
@@ -224,13 +242,17 @@ honours `KAKAO_EXE`. The invariants are:
 - the base trees are linked;
 - every state path resolves inside the state layer;
 - the state layer is not overlayfs;
-- `C:\injector` points at the payload dir.
+- `C:\injector` points at the payload dir;
+- the base is read-only: creating a file at its root or in a linked tree fails
+  with `EROFS` (a permission error does not count), so `run` needs
+  `docker run --read-only`.
 
 Mount tmpfs layers with `exec`, because Wine maps PE images from them.
 
 `verify-layered.sh` is account-free and passes if all of these hold:
 
-- the invariants hold;
+- the invariants hold, and `check` fails when pointed at a writable base, or at
+  one that is merely unwritable for the wine user (`EACCES`);
 - writing into the base fails, both directly and through the prefix;
 - the **unmodified** client stays up from the layered prefix;
 - its writes land in the state layer, where `prefix-state.sh snapshot` captures them.

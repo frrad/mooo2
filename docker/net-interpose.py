@@ -16,12 +16,24 @@ process then:
     is allowlisted, bytes are spliced to the real server. Otherwise the connection
     is held for up to 2 s to read a TLS ClientHello (for the SNI), logged, and
     reset. Default is deny: an empty allowlist lets nothing out.
+    A destination allowed only because an allowlisted name resolved to it may be
+    a shared CDN address that serves other names too. So on such a flow, if the
+    client opens with a TLS ClientHello, its SNI must also be allowlisted (for
+    that port), or the flow is denied before any byte reaches the server. A
+    ClientHello without SNI is denied too, and so is any first byte 0x16 (TLS
+    handshake) whose record is not complete and parseable within 2 s, so the
+    check cannot be dodged by trickling the hello in. Destinations allowlisted
+    by address are not SNI-checked, and neither are flows whose first byte is
+    not 0x16.
   * Ingress fan-out (Shadow mode, DESIGN §8). For allowed flows, every chunk is
     also published to fan-out subscribers (JSON lines on --fanout HOST:PORT):
     "in" is server->client, "out" is client->server. Inbound is received once
     here and delivered to the reference and to each subscriber identically. A
     subscriber (the candidate) can only read; it has no path to the server, so it
-    runs dry-run by construction.
+    runs dry-run by construction. Subscribers never slow the reference: each has
+    its own queue, bounded by --fanout-limit bytes, and one that falls that far
+    behind is disconnected and logged rather than buffered without bound (a
+    dropped chunk would silently desync it).
 
 Every decision is written as a JSON line to --log. The log holds hostnames and
 addresses only, never payload bytes; payload goes to fan-out subscribers alone.
@@ -49,6 +61,8 @@ import time
 SO_ORIGINAL_DST = 80
 SINKHOLE = ipaddress.ip_network("198.18.0.0/15")
 HELLO_WAIT = 2.0
+TLS_RECORD_MAX = 5 + 16384 + 2048   # header + max plaintext + slack
+FANOUT_LIMIT = 8 << 20              # default per-subscriber queue bound, bytes
 
 
 # --- Allowlist ------------------------------------------------------------------
@@ -93,16 +107,52 @@ class Allowlist:
 
 # --- Interpose state --------------------------------------------------------------
 
+class Subscriber:
+    """One fan-out subscriber: a byte-bounded queue drained by its own task, so a
+    slow reader never blocks the flows being published."""
+
+    def __init__(self, writer, limit):
+        self.w = writer
+        self.limit = limit
+        self.q = asyncio.Queue()
+        self.queued = 0        # bytes accepted but not yet drained to the socket
+
+    def offer(self, line):
+        """Queue a line; False if that would exceed the bound. An empty queue
+        always accepts, so one chunk larger than the bound still goes through."""
+        if self.queued and self.queued + len(line) > self.limit:
+            return False
+        self.queued += len(line)
+        self.q.put_nowait(line)
+        return True
+
+    async def run(self):
+        try:
+            while True:
+                line = await self.q.get()
+                self.w.write(line)
+                await self.w.drain()
+                self.queued -= len(line)
+        except (ConnectionError, OSError):
+            pass
+
+    def peer(self):
+        p = self.w.get_extra_info("peername")
+        return "%s:%d" % p[:2] if p else None
+
+
 class Interpose:
-    def __init__(self, allow, log):
+    def __init__(self, allow, log, fanout_limit=FANOUT_LIMIT):
         self.allow = allow
         self.log = log
         self.resolved = {}     # ip -> (name, ports set)
         self.sink_by_name = {}
         self.sink_by_ip = {}
-        self.subs = set()      # fan-out writers
+        self.subs = set()      # fan-out Subscribers
+        self.fanout_limit = fanout_limit
         self.conn_seq = 0
-        self.stats = {"dns_allow": 0, "dns_deny": 0, "tcp_allow": 0, "tcp_deny": 0}
+        self.stats = {"dns_allow": 0, "dns_deny": 0, "tcp_allow": 0, "tcp_deny": 0,
+                      "fanout_drop": 0}
 
     def event(self, **kv):
         kv = {"ts": round(time.time(), 3), **kv}
@@ -129,16 +179,40 @@ class Interpose:
             return (not ports or port in ports), name
         return False, self.sink_by_ip.get(ip)
 
+    def sni_verdict(self, first, port):
+        """For a flow allowed by DNS name: (ok, sni). If the client's first bytes
+        could be a TLS handshake record (first byte 0x16), the record must be
+        complete, hold a ClientHello, and name an allowlisted host for this port;
+        anything short of that fails, so a hello split or trickled past the read
+        window is never let through unchecked. Other first bytes pass."""
+        if not is_tls_handshake(first):
+            return True, None
+        if not tls_record_complete(first):
+            return False, None
+        sni = tls_sni(first[:tls_record_len(first)])
+        if sni is None:
+            return False, None
+        ports = self.allow.name_ports(sni)
+        return ports is not None and (not ports or port in ports), sni
+
     def publish(self, conn, direction, data):
         if not self.subs:
             return
         line = (json.dumps({"conn": conn, "dir": direction,
                             "b64": base64.b64encode(data).decode()}) + "\n").encode()
-        for w in list(self.subs):
-            try:
-                w.write(line)
-            except Exception:  # noqa: BLE001
-                self.subs.discard(w)
+        for sub in list(self.subs):
+            if not sub.offer(line):
+                self.drop_sub(sub, "slow", conn=conn)
+
+    def drop_sub(self, sub, reason, **kv):
+        if sub not in self.subs:
+            return
+        self.subs.discard(sub)
+        self.event(kind="fanout", verdict="drop", reason=reason, peer=sub.peer(),
+                   queued=sub.queued, limit=sub.limit, **kv)
+        print(">> net-interpose: fan-out subscriber %s dropped (%s, %d bytes queued)"
+              % (sub.peer(), reason, sub.queued), flush=True)
+        hard_close(sub.w)
 
 
 # --- DNS stub -------------------------------------------------------------------
@@ -216,6 +290,51 @@ def original_dst(sock):
     return socket.inet_ntoa(raw[4:8]), port
 
 
+def is_tls_handshake(buf):
+    """True if buf may start a TLS handshake record: its first byte is the
+    handshake content type (22). Decided on the first byte alone, so a client
+    cannot dodge the SNI gate by sending a shorter prefix first."""
+    return buf[:1] == b"\x16"
+
+
+def tls_record_len(buf):
+    """Length of the first TLS record (header included); 0 if the 5-byte header
+    is not all in yet."""
+    return 5 + struct.unpack("!H", buf[3:5])[0] if len(buf) >= 5 else 0
+
+
+def tls_record_complete(buf):
+    n = tls_record_len(buf)
+    return n > 0 and len(buf) >= n
+
+
+async def read_first(reader, timeout=None):
+    """The client's first bytes. If they may start a TLS handshake record, keep
+    reading until the whole record is in (the ClientHello can span several
+    segments, and the SNI can sit anywhere in it), up to TLS_RECORD_MAX, EOF or
+    the timeout. Returns b"" if nothing arrived. A record still incomplete when
+    this returns fails sni_verdict."""
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
+    buf = b""
+    while True:
+        left = None if deadline is None else deadline - loop.time()
+        if left is not None and left <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(reader.read(65536), left)
+        except asyncio.TimeoutError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        if not is_tls_handshake(buf) or tls_record_complete(buf):
+            break
+        if len(buf) >= TLS_RECORD_MAX:
+            break
+    return buf
+
+
 def tls_sni(buf):
     """Best-effort SNI from a TLS ClientHello; None if not parseable."""
     try:
@@ -248,8 +367,12 @@ def hard_close(writer):
     writer.close()
 
 
-async def pump(ip, conn, direction, reader, writer):
+async def pump(ip, conn, direction, reader, writer, first=b""):
     try:
+        if first:
+            ip.publish(conn, direction, first)
+            writer.write(first)
+            await writer.drain()
         while True:
             data = await reader.read(65536)
             if not data:
@@ -277,13 +400,34 @@ async def handle_tcp(ip, reader, writer):
     if not allowed:
         hello = b""
         try:
-            hello = await asyncio.wait_for(reader.read(4096), HELLO_WAIT)
-        except (asyncio.TimeoutError, ConnectionError, OSError):
+            hello = await read_first(reader, HELLO_WAIT)
+        except (ConnectionError, OSError):
             pass
         ip.event(kind="tcp", verdict="deny", dst=dst, port=port, name=name,
                  sni=tls_sni(hello), sent=len(hello))
         hard_close(writer)
         return
+
+    # Allowed by DNS name rather than by address: the address may be a shared
+    # CDN front, so the ClientHello must name an allowlisted host too. Check
+    # before connecting. A client that stays silent (a server-speaks-first
+    # protocol) is connected after HELLO_WAIT, and its first bytes, whenever
+    # they come, are checked before they are forwarded.
+    first, gated = b"", name is not None and not ip.allow.ip_allowed(dst, port)
+    if gated:
+        try:
+            first = await read_first(reader, HELLO_WAIT)
+        except (ConnectionError, OSError):
+            hard_close(writer)
+            return
+        if first or reader.at_eof():
+            gated = False
+            ok, sni = ip.sni_verdict(first, port)
+            if not ok:
+                ip.event(kind="tcp", verdict="deny", reason="sni", dst=dst, port=port,
+                         name=name, sni=sni, sent=len(first))
+                hard_close(writer)
+                return
 
     ip.conn_seq += 1
     conn = ip.conn_seq
@@ -295,18 +439,44 @@ async def handle_tcp(ip, reader, writer):
         hard_close(writer)
         return
     ip.event(kind="tcp", verdict="allow", dst=dst, port=port, name=name, conn=conn)
-    await asyncio.gather(pump(ip, conn, "out", reader, uw),
-                         pump(ip, conn, "in", ur, writer))
+    if gated:
+        out = gated_pump(ip, conn, dst, port, name, reader, writer, uw)
+    else:
+        out = pump(ip, conn, "out", reader, uw, first)
+    await asyncio.gather(out, pump(ip, conn, "in", ur, writer))
     uw.close()
     writer.close()
 
 
-async def handle_sub(ip, _reader, writer):
-    ip.subs.add(writer)
+async def gated_pump(ip, conn, dst, port, name, reader, writer, uw):
+    """The client->server pump for a flow whose client was silent at first: SNI-
+    check its first bytes before forwarding anything, then pump as usual."""
     try:
-        await _reader.read()        # held until the subscriber disconnects
+        first = await read_first(reader)
+    except (ConnectionError, OSError):
+        first = b""
+    ok, sni = ip.sni_verdict(first, port)
+    if not ok:
+        ip.event(kind="tcp", verdict="deny", reason="sni", dst=dst, port=port,
+                 name=name, sni=sni, sent=len(first), conn=conn)
+        hard_close(writer)
+        hard_close(uw)
+        return
+    await pump(ip, conn, "out", reader, uw, first)
+
+
+async def handle_sub(ip, reader, writer):
+    sub = Subscriber(writer, ip.fanout_limit)
+    ip.subs.add(sub)
+    sender = asyncio.ensure_future(sub.run())
+    try:
+        await reader.read()         # held until the subscriber disconnects or is dropped
+    except (ConnectionError, OSError):
+        pass
     finally:
-        ip.subs.discard(writer)
+        ip.subs.discard(sub)
+        sender.cancel()
+        writer.close()
 
 
 # --- Main -----------------------------------------------------------------------
@@ -323,7 +493,7 @@ async def amain(args):
             entries += f.read().splitlines()
     allow = Allowlist(entries)
     log = open(args.log, "a", buffering=1)
-    ip = Interpose(allow, log)
+    ip = Interpose(allow, log, args.fanout_limit)
     loop = asyncio.get_running_loop()
 
     h, p = hostport(args.dns)
@@ -352,6 +522,8 @@ def main():
     ap.add_argument("--dns", default="127.0.0.1:15353")
     ap.add_argument("--tcp", default="127.0.0.1:15001")
     ap.add_argument("--fanout", default="", help="HOST:PORT for fan-out subscribers")
+    ap.add_argument("--fanout-limit", type=int, default=FANOUT_LIMIT,
+                    help="bytes a subscriber may fall behind before it is dropped")
     ap.add_argument("--allowlist", default="", help="file of allowlist entries")
     ap.add_argument("--allow", action="append", default=[], help="one allowlist entry")
     ap.add_argument("--log", required=True, help="JSON-lines decision log")

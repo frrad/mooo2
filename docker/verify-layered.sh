@@ -3,8 +3,9 @@
 # does NOT log in and needs no account. Run it in a read-only container with the
 # state layer on a tmpfs or volume (make layered-spike). It proves:
 #   1. the layering invariants (prefix-layer.sh check): base trees linked, the whole
-#      STATE_GLOBS set inside the state layer, the state layer not on overlay, and
-#      C:\injector linked to the payload dir;
+#      STATE_GLOBS set inside the state layer, the state layer not on overlay,
+#      C:\injector linked to the payload dir, and the base read-only (a scratch
+#      writable base must make the check fail);
 #   2. the base is immutable: writing into it, directly or through the prefix, fails;
 #   3. the UNMODIFIED client launches from the layered prefix and stays up, and its
 #      writes land in the state layer, where prefix-state.sh snapshots them.
@@ -18,6 +19,26 @@ FAILS=()
 
 "$HERE/prefix-layer.sh" assemble --fresh
 "$HERE/prefix-layer.sh" check || FAILS+=("layering invariants")
+# Negative case: check must notice a writable base. Point it at a scratch dir on
+# the /tmp tmpfs and expect the read-only probe to fire (and to clean up).
+# Its Program Files tree is mode 0555: unwritable for us (EACCES) but on a
+# writable filesystem, which must not count as read-only either.
+FAKE_BASE="$(mktemp -d)"
+mkdir -p "$FAKE_BASE/drive_c/windows" "$FAKE_BASE/drive_c/Program Files"
+chmod 0555 "$FAKE_BASE/drive_c/Program Files"
+if KAKAO_BASE="$FAKE_BASE" "$HERE/prefix-layer.sh" check >/dev/null 2>"$FAKE_BASE.err"; then
+  FAILS+=("prefix-layer.sh check passed with a writable base")
+fi
+grep -q "base is writable at $FAKE_BASE/drive_c/windows" "$FAKE_BASE.err" \
+  || FAILS+=("prefix-layer.sh check did not report the writable base")
+if [ "$(id -u)" != 0 ]; then     # root ignores the mode bits
+  grep -q "base at $FAKE_BASE/drive_c/Program Files is not on a read-only filesystem (create failed with EACCES" \
+    "$FAKE_BASE.err" || FAILS+=("prefix-layer.sh check accepted EACCES as read-only")
+fi
+[ -z "$(find "$FAKE_BASE" -name '.layer-ro-probe.*')" ] \
+  || FAILS+=("prefix-layer.sh check left its probe file behind")
+chmod 0755 "$FAKE_BASE/drive_c/Program Files"
+rm -rf "$FAKE_BASE" "$FAKE_BASE.err"
 
 # --- Base immutability ----------------------------------------------------------
 for t in "$BASE/drive_c/windows/.layer-probe" "$STATE/drive_c/windows/.layer-probe" \

@@ -52,17 +52,21 @@ while IFS= read -r f; do
   def="$OUT_DIR/${base}.def"
 
   echo ">> box-proxy: candidate '$b' (forwards -> ${origmod}.dll)"
-  if ! "$GENDEF_FWD" "$APPDIR/$b" "$origmod" > "$def" 2>/dev/null; then
+  # gendef and gcc keep their stderr: a skipped candidate says why in the build log.
+  if ! "$GENDEF_FWD" "$APPDIR/$b" "$origmod" > "$def"; then
     echo ">> box-proxy: '$b': forwarder generation failed; trying next" >&2
+    rm -f "$def"
     continue
   fi
   nfwd=$(($(wc -l < "$def") - 1))
   if [ "$nfwd" -lt 1 ]; then
     echo ">> box-proxy: '$b': zero named exports (ordinal-only?); trying next" >&2
+    rm -f "$def"
     continue
   fi
-  if ! "$GCC" -O2 -shared -o "$OUT_DIR/$b" "$PROBE_SRC" "$def" -luser32 2>/dev/null; then
+  if ! "$GCC" -O2 -shared -o "$OUT_DIR/$b" "$PROBE_SRC" "$def" -luser32; then
     echo ">> box-proxy: '$b': proxy failed to link; trying next" >&2
+    rm -f "$def" "$OUT_DIR/$b"
     continue
   fi
   echo ">> forwarders generated: $nfwd exports"

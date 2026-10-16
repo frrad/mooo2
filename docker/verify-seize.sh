@@ -6,7 +6,8 @@
 #      env file, then again from that capture: the wall clock reads the pinned date,
 #      QueryPerformanceCounter and GetTickCount64 sit at the pinned epoch, and
 #      every random API returns the same bytes. A third run with another seed must
-#      differ, so the bytes really come from the seed.
+#      differ, so the bytes really come from the seed. A chain of probe processes
+#      (the first exits before the last starts) must read one continuous clock.
 #   2. the UNMODIFIED client launches and stays up seized, with both seize
 #      libraries mapped into KakaoTalk.exe. Any entropy it draws is logged.
 set -euo pipefail
@@ -75,6 +76,28 @@ for k in $APIS; do
   [ "$a" = "$b" ] && [ "$a" != "$c" ] && SAME=$((SAME + 1))
 done
 
+# --- 1b. One clock across processes ---------------------------------------------
+# seize-probe.exe chain: the parent prints its clock, starts a relay and exits; the
+# relay sleeps 2 s, prints its clock and starts a child. The child must not read
+# earlier than the relay: a per-process libfaketime start would restart it at the
+# pinned instant once the first seized process is gone.
+wineserver -k >/dev/null 2>&1 || true; wineserver -w 2>/dev/null || true
+"$HERE/seize.sh" --from "$RUN/seize.env" -- wine "$PROBE" chain \
+  >"$RUN/chain.txt" 2>"$RUN/chain.err" || true
+for _ in $(seq 1 60); do grep -q '^child_qpc_ms' "$RUN/chain.txt" && break; sleep 0.5; done
+wineserver -k >/dev/null 2>&1 || true; wineserver -w 2>/dev/null || true
+echo "----- seize-probe chain -----"; tr -d '\r' < "$RUN/chain.txt"
+for c in wall qpc; do
+  p="$(field "parent_${c}_ms" "$RUN/chain.txt")"
+  r="$(field "relay_${c}_ms" "$RUN/chain.txt")"
+  k="$(field "child_${c}_ms" "$RUN/chain.txt")"
+  if ! [[ "$p" =~ ^[0-9]+$ && "$r" =~ ^[0-9]+$ && "$k" =~ ^[0-9]+$ ]]; then
+    FAILS+=("clock: chain $c incomplete (parent=$p relay=$r child=$k)"); continue
+  fi
+  [ $((r - p)) -ge 1500 ] || FAILS+=("clock: chain $c relay-parent=$((r - p))ms, want >= 1500")
+  [ "$k" -ge "$r" ]       || FAILS+=("clock: chain $c child=$k earlier than relay=$r (clock restarted)")
+done
+
 # --- 2. The unmodified client, seized -------------------------------------------
 wineserver -k >/dev/null 2>&1 || true; wineserver -w 2>/dev/null || true
 echo ">> launching seized: $EXE (hold ${HOLD}s)"
@@ -104,7 +127,7 @@ echo "----- entropy served per process (client run) -----"
 for f in "$RUN"/client.rng/*.rng; do [ -f "$f" ] && echo "  $(basename "$f") $(stat -c %s "$f") bytes"; done
 
 if [ "${#FAILS[@]}" -eq 0 ]; then
-  echo "PASS: clock (wall, QPC, tick) pinned to $PIN_DATE and $SAME/6 CSPRNG APIs replay byte-identical from the capture; KakaoTalk stayed up ${HOLD}s seized (drew ${CLIENT_BYTES} seeded bytes)"
+  echo "PASS: clock (wall, QPC, tick) pinned to $PIN_DATE, one clock across processes, and $SAME/6 CSPRNG APIs replay byte-identical from the capture; KakaoTalk stayed up ${HOLD}s seized (drew ${CLIENT_BYTES} seeded bytes)"
   exit 0
 fi
 echo "FAIL: clock/RNG seize check did not pass" >&2

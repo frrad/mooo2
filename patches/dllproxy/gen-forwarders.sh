@@ -18,7 +18,7 @@ ORIGMOD="${2:?usage: gen-forwarders.sh <original.dll> <orig-module-basename>}"
 echo "EXPORTS"
 # gendef prints "LIBRARY ..." then "EXPORTS" then one decorated name per line
 # (comment lines start with ';'). Each name becomes a forwarder to ORIGMOD.name.
-gendef - "$DLL" 2>/dev/null \
+gendef - "$DLL" \
   | awk '/^EXPORTS/{e=1; next} e && NF && $1 !~ /^;/ {print $1}' \
   | while IFS= read -r name; do
       printf '%s=%s.%s\n' "$name" "$ORIGMOD" "$name"
