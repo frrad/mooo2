@@ -101,8 +101,13 @@ func writeValue(b *bytes.Buffer, v any) error {
 	return nil
 }
 
-// formatDouble gives a decimal string that round-trips through
-// strconv.ParseFloat, with the spec's names for the non-finite values.
+// formatDouble gives the canonical $numberDouble string: the shortest
+// decimal that round-trips through strconv.ParseFloat, with the spec's names
+// for the non-finite values. It follows the BSON corpus (double.json) and
+// the common driver form: plain notation with at least one fractional digit
+// for decimal exponents in [-4, 16) ("1.0", "1000000.0", "-0.0"), otherwise
+// an exponent with an upper-case E, an explicit sign and no zero padding
+// ("1.2345678921232E+18", "1E+100", "5E-324").
 func formatDouble(f float64) string {
 	switch {
 	case math.IsNaN(f):
@@ -112,11 +117,21 @@ func formatDouble(f float64) string {
 	case math.IsInf(f, -1):
 		return "-Infinity"
 	}
-	s := strconv.FormatFloat(f, 'G', -1, 64)
-	if !strings.ContainsAny(s, ".E") {
-		s += ".0"
+	sci := strconv.FormatFloat(f, 'e', -1, 64) // "-1.5e+06"
+	mant, exp, _ := strings.Cut(sci, "e")
+	e, _ := strconv.Atoi(exp) // always well formed
+	if e >= -4 && e < 16 {
+		s := strconv.FormatFloat(f, 'f', -1, 64)
+		if !strings.Contains(s, ".") {
+			s += ".0"
+		}
+		return s
 	}
-	return s
+	sign := "+"
+	if e < 0 {
+		sign, e = "-", -e
+	}
+	return mant + "E" + sign + strconv.Itoa(e)
 }
 
 func parseDouble(s string) (float64, error) {

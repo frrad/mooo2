@@ -122,7 +122,7 @@ func TestVectors(t *testing.T) {
 }
 
 func TestDoubles(t *testing.T) {
-	for _, f := range []float64{0, math.Copysign(0, -1), 1, -1.5, 1e300, 5e-324, math.Inf(1), math.Inf(-1)} {
+	for _, f := range []float64{0, math.Copysign(0, -1), 1, -1.5, 1e6, 1e15, 1e16, 1e-4, 1e-5, 1e300, 5e-324, math.Inf(1), math.Inf(-1)} {
 		ext, err := ToExtJSON(D{{"f", f}})
 		if err != nil {
 			t.Fatal(err)
@@ -139,6 +139,37 @@ func TestDoubles(t *testing.T) {
 	d, err := FromExtJSON([]byte(`{"f":{"$numberDouble":"NaN"}}`))
 	if err != nil || !math.IsNaN(d[0].Value.(float64)) {
 		t.Errorf("NaN: %v %v", d, err)
+	}
+}
+
+func TestDoubleCanonicalForm(t *testing.T) {
+	// Expected strings follow the BSON corpus (double.json) where it has a
+	// case, and the common driver form elsewhere.
+	for f, want := range map[float64]string{
+		1:                    "1.0",
+		-1:                   "-1.0",
+		1.0001220703125:      "1.0001220703125",
+		1.2345678921232e18:   "1.2345678921232E+18",
+		-1.2345678921232e18:  "-1.2345678921232E+18",
+		0:                    "0.0",
+		math.Copysign(0, -1): "-0.0",
+		1e100:                "1E+100",
+		1e6:                  "1000000.0",
+		-1.5e6:               "-1500000.0",
+		123456789012345:      "123456789012345.0",
+		1e16:                 "1E+16",
+		0.0001:               "0.0001",
+		0.00001:              "1E-5",
+		5e-324:               "5E-324",
+		math.Inf(1):          "Infinity",
+		math.Inf(-1):         "-Infinity",
+	} {
+		if got := formatDouble(f); got != want {
+			t.Errorf("formatDouble(%v) = %q, want %q", f, got, want)
+		}
+	}
+	if got := formatDouble(math.NaN()); got != "NaN" {
+		t.Errorf("formatDouble(NaN) = %q", got)
 	}
 }
 
